@@ -150,7 +150,7 @@ Repo conventions to match:
 | Focused tests           | `vp test core/__tests__/SharedWalkthroughApp.test.tsx core/__tests__/review-hooks.test.tsx`            | exit 0; both files pass                               |
 | Full tests              | `vp test --maxWorkers=1`                                                                               | exit 0; all tests pass                                |
 | Required validation/fix | `vp check --fix`                                                                                       | exit 0; no remaining lint, format, or type errors     |
-| Required build          | `vpr build` or `vp run build` when `vpr` is unavailable                                                | exit 0; built artifacts refreshed                     |
+| Required build          | `vpr build`                                                                                            | exit 0; built artifacts refreshed                     |
 | Public declarations     | `rg -n -e SidebarPosition -e sidebarPosition core/dist/react.d.ts core/dist/SharedWalkthroughApp.d.ts` | matches show the public type export and optional prop |
 
 Do not install, publish, push, or open a PR unless the operator separately asks.
@@ -169,6 +169,7 @@ Do not install, publish, push, or open a PR unless the operator separately asks.
 - `core/README.md`
 - `core/__tests__/SharedWalkthroughApp.test.tsx`
 - `core/__tests__/review-hooks.test.tsx`
+- `plans/001-review-surface-right-sidebar.md` (scope reconciliation and execution evidence)
 - `plans/README.md` (status row only)
 
 **Out of scope (do not touch):**
@@ -332,8 +333,8 @@ In `core/__tests__/review-hooks.test.tsx`:
    no width is committed, the displayed width is unchanged, and drag cleanup
    runs.
 
-Do not replace the current left resize and collapse cases; they are the
-backward-compatibility tests for the hook's optional default.
+Keep the current left resize and collapse cases in the table-driven coverage;
+they are the backward-compatibility tests for the hook's explicit left input.
 
 **Verify**:
 `vp test core/__tests__/SharedWalkthroughApp.test.tsx core/__tests__/review-hooks.test.tsx`
@@ -355,12 +356,14 @@ backward-compatibility tests for the hook's optional default.
 2. Run the required validation in this exact final order. Use one worker for
    the full suite because the packaged CLI tests have five-second per-test
    timeouts under parallel load. If the local `vpr` shorthand is unavailable,
-   use the documented equivalent `vp run build`:
+   define its documented `vp run` mapping in the current shell before running
+   the commands:
 
    ```sh
+   vpr() { vp run "$@"; }
    vp check --fix
    vp test --maxWorkers=1
-   vp run build
+   vpr build
    ```
 
 3. Inspect the generated declarations with:
@@ -427,7 +430,7 @@ Structural test exemplars:
 - [x] Toggle icon is mirrored only for the right-side layout.
 - [x] Focused layout, resize, collapse, icon, export, and compatibility tests
       pass.
-- [x] `vp check --fix`, `vp test --maxWorkers=1`, and `vp run build` all exit 0,
+- [x] `vp check --fix`, `vp test --maxWorkers=1`, and `vpr build` all exit 0,
       in that order.
 - [x] Generated declarations contain the public type and optional prop.
 - [x] `core/README.md` documents default and right-side usage.

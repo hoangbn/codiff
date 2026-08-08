@@ -67,7 +67,7 @@ const commenting = {
   onUpdateGeneralComment: async () => {},
 } satisfies ReviewCommenting;
 
-const createSharedSnapshot = (): SharedWalkthroughSnapshot => {
+const createSharedSnapshot = () => {
   const source = { type: 'working-tree' } as const;
   return {
     branch: 'main',
@@ -97,7 +97,7 @@ const createSharedSnapshot = (): SharedWalkthroughSnapshot => {
       title: 'Shared walkthrough',
       version: 4,
     },
-  };
+  } satisfies SharedWalkthroughSnapshot;
 };
 
 test('review top bar renders its leading control at the far left', async () => {
@@ -143,7 +143,7 @@ test('review surfaces place, mirror, collapse, and restore right sidebars', asyn
   expect(shell?.style.gridTemplateColumns).toBe('292px 0 minmax(0, 1fr)');
   expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBeNull();
 
-  const rightPosition: SidebarPosition = 'right';
+  const rightPosition = 'right' satisfies SidebarPosition;
   await view.rerender(<ReviewSurface sidebarPosition={rightPosition} snapshot={snapshot} />);
   expect(shell?.dataset.sidebarPosition).toBe('right');
   expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');

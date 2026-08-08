@@ -127,89 +127,59 @@ const prepareResizeHandle = (container: HTMLElement) => {
   return handle;
 };
 
-test('resizable sidebars clamp drag widths and commit them on release', async () => {
-  const onWidthCommit = vi.fn();
-  await using view = await renderReact(
-    <ResizableSidebarHarness onWidthCommit={onWidthCommit} position="left" />,
-  );
+test.each([
+  { clientX: 370, expectedWidth: 350, position: 'left' },
+  { clientX: 100, expectedWidth: 640, position: 'right' },
+] as const)(
+  '$position resizable sidebars measure, clamp, and commit drag widths',
+  async (testCase) => {
+    const onWidthCommit = vi.fn();
+    await using view = await renderReact(
+      <ResizableSidebarHarness onWidthCommit={onWidthCommit} position={testCase.position} />,
+    );
 
-  const handle = prepareResizeHandle(view.container);
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 370 }));
-  });
-  expect(handle.dataset.width).toBe('350');
-  expect(onWidthCommit).not.toHaveBeenCalled();
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerup'));
-  });
-  expect(onWidthCommit).toHaveBeenCalledWith(350);
-  expect(handle.classList.contains('dragging')).toBe(false);
-  expect(document.body.style.cursor).toBe('');
-});
+    const handle = prepareResizeHandle(view.container);
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      handle.dispatchEvent(new MouseEvent('pointermove', { clientX: testCase.clientX }));
+    });
+    expect(handle.dataset.width).toBe(String(testCase.expectedWidth));
+    expect(onWidthCommit).not.toHaveBeenCalled();
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('pointerup'));
+    });
+    expect(onWidthCommit).toHaveBeenCalledOnce();
+    expect(onWidthCommit).toHaveBeenCalledWith(testCase.expectedWidth);
+    expect(handle.classList.contains('dragging')).toBe(false);
+    expect(document.body.style.cursor).toBe('');
+  },
+);
 
-test('resizable sidebars can collapse during a drag without committing a width', async () => {
-  const onCollapse = vi.fn();
-  const onWidthCommit = vi.fn();
-  await using view = await renderReact(
-    <ResizableSidebarHarness
-      collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
-      onCollapse={onCollapse}
-      onWidthCommit={onWidthCommit}
-      position="left"
-    />,
-  );
+test.each([
+  { clientX: 50, position: 'left' },
+  { clientX: 750, position: 'right' },
+] as const)(
+  '$position resizable sidebars collapse during a drag without committing',
+  async (testCase) => {
+    const onCollapse = vi.fn();
+    const onWidthCommit = vi.fn();
+    await using view = await renderReact(
+      <ResizableSidebarHarness
+        collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
+        onCollapse={onCollapse}
+        onWidthCommit={onWidthCommit}
+        position={testCase.position}
+      />,
+    );
 
-  const handle = prepareResizeHandle(view.container);
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 50 }));
-  });
-  expect(onCollapse).toHaveBeenCalledOnce();
-  expect(onWidthCommit).not.toHaveBeenCalled();
-  expect(handle.dataset.width).toBe('292');
-  expect(handle.classList.contains('dragging')).toBe(false);
-});
-
-test('right resizable sidebars measure from the shell right edge and commit clamped widths', async () => {
-  const onWidthCommit = vi.fn();
-  await using view = await renderReact(
-    <ResizableSidebarHarness onWidthCommit={onWidthCommit} position="right" />,
-  );
-
-  const handle = prepareResizeHandle(view.container);
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 100 }));
-  });
-  expect(handle.dataset.width).toBe('640');
-  expect(onWidthCommit).not.toHaveBeenCalled();
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerup'));
-  });
-  expect(onWidthCommit).toHaveBeenCalledOnce();
-  expect(onWidthCommit).toHaveBeenCalledWith(640);
-});
-
-test('right resizable sidebars collapse toward the shell right edge without committing', async () => {
-  const onCollapse = vi.fn();
-  const onWidthCommit = vi.fn();
-  await using view = await renderReact(
-    <ResizableSidebarHarness
-      collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
-      onCollapse={onCollapse}
-      onWidthCommit={onWidthCommit}
-      position="right"
-    />,
-  );
-
-  const handle = prepareResizeHandle(view.container);
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 750 }));
-  });
-  expect(onCollapse).toHaveBeenCalledOnce();
-  expect(onWidthCommit).not.toHaveBeenCalled();
-  expect(handle.dataset.width).toBe('292');
-  expect(handle.classList.contains('dragging')).toBe(false);
-});
+    const handle = prepareResizeHandle(view.container);
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      handle.dispatchEvent(new MouseEvent('pointermove', { clientX: testCase.clientX }));
+    });
+    expect(onCollapse).toHaveBeenCalledOnce();
+    expect(onWidthCommit).not.toHaveBeenCalled();
+    expect(handle.dataset.width).toBe('292');
+    expect(handle.classList.contains('dragging')).toBe(false);
+  },
+);
