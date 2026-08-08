@@ -286,6 +286,7 @@ export default function App() {
     collapseThreshold: SIDEBAR_COLLAPSE_THRESHOLD,
     onCollapse: collapseSidebar,
     onWidthCommit: writeSidebarWidth,
+    position: 'left',
     readWidth: readSidebarWidth,
   });
   const {
@@ -1838,6 +1839,7 @@ export default function App() {
         }
         repositoryTooltip={state.root}
         sidebarCollapsed={sidebarCollapsed}
+        sidebarPosition="left"
         sourceMenu={
           <OpenReviewSourceMenu
             onOpen={showOpenReviewSourceDialog}

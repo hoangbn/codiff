@@ -1,5 +1,6 @@
 import { SidebarSimpleIcon as SidebarSimple } from '@phosphor-icons/react/SidebarSimple';
 import type { ReactNode } from 'react';
+import type { SidebarPosition } from '../../lib/app-types.ts';
 
 export type ReviewModeItem<Mode extends string> = {
   ariaLabel?: string;
@@ -21,6 +22,7 @@ export function ReviewTopBar<Mode extends string>({
   repository,
   repositoryTooltip,
   sidebarCollapsed,
+  sidebarPosition,
   sourceMenu,
   toggleTitle,
 }: {
@@ -34,6 +36,7 @@ export function ReviewTopBar<Mode extends string>({
   repository: ReactNode;
   repositoryTooltip?: string;
   sidebarCollapsed: boolean;
+  sidebarPosition: SidebarPosition;
   sourceMenu?: ReactNode;
   toggleTitle: string;
 }) {
@@ -48,7 +51,12 @@ export function ReviewTopBar<Mode extends string>({
           title={toggleTitle}
           type="button"
         >
-          <SidebarSimple aria-hidden size={18} weight="bold" />
+          <SidebarSimple
+            aria-hidden
+            mirrored={sidebarPosition === 'right'}
+            size={18}
+            weight="bold"
+          />
         </button>
         {sourceMenu}
         <div className="review-top-bar-repository-slot" title={repositoryTooltip}>

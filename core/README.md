@@ -13,3 +13,16 @@ export function Review({ snapshot }: { snapshot: SharedWalkthroughSnapshot }) {
   return <ReviewSurface snapshot={snapshot} />;
 }
 ```
+
+## Sidebar placement
+
+The `ReviewSurface` interface accepts an optional `sidebarPosition` of `left` (the default) or
+`right`. The exported `SidebarPosition` type can be used when the value is selected dynamically:
+
+```tsx
+import { ReviewSurface, type SidebarPosition } from '@nkzw/codiff-core/react';
+
+const sidebarPosition: SidebarPosition = 'right';
+
+<ReviewSurface sidebarPosition={sidebarPosition} snapshot={snapshot} />;
+```

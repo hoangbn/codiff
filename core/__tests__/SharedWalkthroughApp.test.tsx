@@ -2,14 +2,16 @@
  * @vitest-environment jsdom
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
 import { ReviewTopBar } from '../app/components/ReviewTopBar.tsx';
-import { ReviewSurface, type ReviewCommenting } from '../SharedWalkthroughApp.tsx';
+import { ReviewSurface, type ReviewCommenting, type SidebarPosition } from '../react.ts';
 import type { NarrativeWalkthrough, SharedWalkthroughSnapshot } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
-import { waitFor } from './helpers/react.tsx';
+import { renderReact, waitFor } from './helpers/react.tsx';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   ResizeObserver?: typeof ResizeObserver;
@@ -65,6 +67,39 @@ const commenting = {
   onUpdateGeneralComment: async () => {},
 } satisfies ReviewCommenting;
 
+const createSharedSnapshot = (): SharedWalkthroughSnapshot => {
+  const source = { type: 'working-tree' } as const;
+  return {
+    branch: 'main',
+    codiffVersion: '1.10.1',
+    exportedAt: '2026-08-07T00:00:00.000Z',
+    files: [createChangedFile('src/app.ts')],
+    kind: 'codiff-walkthrough-share',
+    preferences: {
+      codeFontFamily: '',
+      codeFontSize: 13,
+      diffStyle: 'split',
+      showWhitespace: false,
+      theme: 'system',
+      wordWrap: false,
+    },
+    repository: { root: '/repo', source },
+    version: 1,
+    walkthrough: {
+      agent: 'codex',
+      chapters: [],
+      focus: 'Review the implementation.',
+      generatedAt: '2026-08-07T00:00:00.000Z',
+      kind: 'narrative',
+      repo: { branch: 'main', root: '/repo' },
+      source,
+      support: [],
+      title: 'Shared walkthrough',
+      version: 4,
+    },
+  };
+};
+
 test('review top bar renders its leading control at the far left', async () => {
   const container = document.createElement('div');
   document.body.append(container);
@@ -80,6 +115,7 @@ test('review top bar renders its leading control at the far left', async () => {
         onToggleSidebar={() => {}}
         repository="cloudflare/voidzero/codiff-web"
         sidebarCollapsed={false}
+        sidebarPosition="left"
         toggleTitle="Collapse sidebar"
       />,
     );
@@ -94,6 +130,52 @@ test('review top bar renders its leading control at the far left', async () => {
 
   await act(async () => root.unmount());
   container.remove();
+});
+
+test('review surfaces place, mirror, collapse, and restore right sidebars', async () => {
+  window.localStorage.clear();
+  const snapshot = createSharedSnapshot();
+  await using view = await renderReact(<ReviewSurface snapshot={snapshot} />);
+
+  const shell = view.container.querySelector<HTMLElement>('.app-shell');
+  const toggle = view.container.querySelector<HTMLButtonElement>('.sidebar-toggle-button');
+  expect(shell?.dataset.sidebarPosition).toBe('left');
+  expect(shell?.style.gridTemplateColumns).toBe('292px 0 minmax(0, 1fr)');
+  expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBeNull();
+
+  const rightPosition: SidebarPosition = 'right';
+  await view.rerender(<ReviewSurface sidebarPosition={rightPosition} snapshot={snapshot} />);
+  expect(shell?.dataset.sidebarPosition).toBe('right');
+  expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
+  expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBe('scale(-1, 1)');
+
+  await act(async () => toggle?.click());
+  expect(shell?.classList.contains('sidebar-collapsed')).toBe(true);
+  expect(shell?.style.gridTemplateColumns).toBe('');
+  expect(toggle?.getAttribute('aria-label')).toBe('Expand sidebar');
+
+  await act(async () => toggle?.click());
+  expect(shell?.classList.contains('sidebar-collapsed')).toBe(false);
+  expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
+  expect(toggle?.getAttribute('aria-label')).toBe('Collapse sidebar');
+});
+
+test('review shell styles assign expanded and collapsed grid columns explicitly', () => {
+  const css = readFileSync(resolve('core/App.css'), 'utf8');
+  expect(css.match(/\.app-shell > \.sidebar \{([^}]*)\}/)?.[1]).toContain('grid-column: 1;');
+  expect(css.match(/\.app-shell > \.sidebar-resizer \{([^}]*)\}/)?.[1]).toContain(
+    'grid-column: 2;',
+  );
+  expect(css.match(/\.app-shell > \.review \{([^}]*)\}/)?.[1]).toContain('grid-column: 3;');
+  expect(
+    css.match(/\.app-shell\[data-sidebar-position='right'\] > \.review \{([^}]*)\}/)?.[1],
+  ).toContain('grid-column: 1;');
+  expect(
+    css.match(/\.app-shell\[data-sidebar-position='right'\] > \.sidebar \{([^}]*)\}/)?.[1],
+  ).toContain('grid-column: 3;');
+  expect(css.match(/\.app-shell\.sidebar-collapsed > \.review \{([^}]*)\}/)?.[1]).toContain(
+    'grid-column: 1;',
+  );
 });
 
 test('share viewer shows the complete repository path when there is no repository link', async () => {
