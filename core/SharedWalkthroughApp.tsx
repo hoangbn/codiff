@@ -430,15 +430,19 @@ export function ReviewSurface({
   const [walkthroughRequestId, setWalkthroughRequestId] = useState(0);
   const interactiveRef = useRef(interactive);
 
-  const visibleFiles = useMemo(
-    () =>
-      sortFiles(reviewFiles).filter(
-        (file) =>
-          fuzzyMatches(file.path, fileSearchQuery) &&
-          fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
-      ),
-    [fileSearchQuery, reviewFiles, snapshot.preferences.showWhitespace],
-  );
+  const focusPath = snapshot.files[0]?.path;
+  const visibleFiles = useMemo(() => {
+    const files = sortFiles(reviewFiles).filter(
+      (file) =>
+        fuzzyMatches(file.path, fileSearchQuery) &&
+        fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
+    );
+    const focusIndex = files.findIndex((file) => file.path === focusPath);
+    const focusFile = files[focusIndex];
+    return focusIndex <= 0 || !focusFile
+      ? files
+      : [focusFile, ...files.slice(0, focusIndex), ...files.slice(focusIndex + 1)];
+  }, [fileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
   const totalLineCount = useMemo(
     () =>
       getTotalDiffLineCount(

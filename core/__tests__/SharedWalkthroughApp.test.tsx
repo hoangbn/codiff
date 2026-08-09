@@ -160,6 +160,19 @@ test('review surfaces place, mirror, collapse, and restore right sidebars', asyn
   expect(toggle?.getAttribute('aria-label')).toBe('Collapse sidebar');
 });
 
+test('tree review keeps the snapshot focus file ahead of alphabetical siblings', async () => {
+  const snapshot = {
+    ...createSharedSnapshot(),
+    files: [createChangedFile('current.md'), createChangedFile('changed.png')],
+  } satisfies SharedWalkthroughSnapshot;
+  await using view = await renderReact(<ReviewSurface initialMode="tree" snapshot={snapshot} />);
+
+  await waitFor(() => {
+    expect(view.container.querySelectorAll('.codiff-file-header')).toHaveLength(2);
+  });
+  expect(view.container.querySelector('.codiff-file-header')?.textContent).toContain('current.md');
+});
+
 test('review shell styles assign expanded and collapsed grid columns explicitly', () => {
   const css = readFileSync(resolve('core/App.css'), 'utf8');
   expect(css.match(/\.app-shell > \.sidebar \{([^}]*)\}/)?.[1]).toContain('grid-column: 1;');
