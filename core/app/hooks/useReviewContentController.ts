@@ -112,6 +112,21 @@ export function useReviewContentController({
     },
     [snapshot],
   );
+  const requestSectionContent = useCallback(
+    (file: ChangedFile, section: DiffSection) => {
+      if (!contentLoader) {
+        throw new Error(`Cannot load diff contents for '${file.path}'.`);
+      }
+      return contentLoader.loadSectionContent({
+        force: true,
+        kind: section.kind,
+        path: file.path,
+        showWhitespace: snapshot.preferences.showWhitespace,
+        source: snapshot.repository.source,
+      });
+    },
+    [contentLoader, snapshot.preferences.showWhitespace, snapshot.repository.source],
+  );
   const loadDeferredSection = useCallback(
     async (file: ChangedFile, section: DiffSection) => {
       if (!contentLoader || !shouldLoadDiffSectionContents(section)) {
@@ -123,13 +138,7 @@ export function useReviewContentController({
       }
 
       try {
-        const loadedSection = await contentLoader.loadSectionContent({
-          force: true,
-          kind: section.kind,
-          path: file.path,
-          showWhitespace: snapshot.preferences.showWhitespace,
-          source: snapshot.repository.source,
-        });
+        const loadedSection = await requestSectionContent(file, section);
         if (loadedSection.id !== section.id || loadedSection.kind !== section.kind) {
           throw new Error(`Loaded section did not match '${section.id}'.`);
         }
@@ -144,20 +153,11 @@ export function useReviewContentController({
         request.finish();
       }
     },
-    [applyReviewSectionUpdate, beginSectionContentRequest, contentLoader, snapshot],
+    [applyReviewSectionUpdate, beginSectionContentRequest, contentLoader, requestSectionContent],
   );
   const loadSectionContents = useCallback(
     async (file: ChangedFile, section: DiffSection): Promise<FileDiffLoadedFiles> => {
-      if (!contentLoader) {
-        throw new Error(`Cannot load diff contents for '${file.path}'.`);
-      }
-      const loadedSection = await contentLoader.loadSectionContent({
-        force: true,
-        kind: section.kind,
-        path: file.path,
-        showWhitespace: snapshot.preferences.showWhitespace,
-        source: snapshot.repository.source,
-      });
+      const loadedSection = await requestSectionContent(file, section);
       if (
         loadedSection.id !== section.id ||
         loadedSection.kind !== section.kind ||
@@ -170,7 +170,7 @@ export function useReviewContentController({
         oldFile: loadedSection.oldFile ?? null,
       };
     },
-    [contentLoader, snapshot.preferences.showWhitespace, snapshot.repository.source],
+    [requestSectionContent],
   );
 
   return {
