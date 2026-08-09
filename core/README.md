@@ -14,6 +14,24 @@ export function Review({ snapshot }: { snapshot: SharedWalkthroughSnapshot }) {
 }
 ```
 
+## Deferred content
+
+`ReviewSurface` accepts one optional `contentLoader` for deferred text sections and supported image
+previews. Codiff builds requests from the snapshot source and preferences, owns loading and failure
+state, and keeps the surface read-only unless its separate commenting or interactive contracts are
+provided.
+
+```tsx
+import { ReviewSurface, type ReviewContentLoader } from '@nkzw/codiff-core/react';
+
+const contentLoader: ReviewContentLoader = {
+  loadImageContent: (request) => host.loadImage(request),
+  loadSectionContent: (request) => host.loadSection(request),
+};
+
+<ReviewSurface contentLoader={contentLoader} initialMode="tree" snapshot={snapshot} />;
+```
+
 ## Sidebar placement
 
 The `ReviewSurface` interface accepts an optional `sidebarPosition` of `left` (the default) or

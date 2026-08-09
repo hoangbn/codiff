@@ -2,6 +2,7 @@ import { ArrowSquareOutIcon as ArrowSquareOut } from '@phosphor-icons/react/Arro
 import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
 import { PathIcon as Path } from '@phosphor-icons/react/Path';
 import { TreeStructureIcon as TreeStructure } from '@phosphor-icons/react/TreeStructure';
+import type { FileDiffLoadedFiles } from '@pierre/diffs';
 import { Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from './app/components/Button.tsx';
@@ -52,9 +53,13 @@ import type {
 } from './lib/app-types.ts';
 import {
   fileHasVisibleDiff,
+  getDiffSectionLoadKey,
   getDiffLineCount,
+  getFailedSectionLoadState,
   getTotalDiffLineCount,
   isMarkdownFilePath,
+  shouldLoadDiffSectionContents,
+  updateDiffSection,
 } from './lib/diff.ts';
 import { abbreviateHomePath, fuzzyMatches, sortFiles } from './lib/files.ts';
 import { isNativeInputTarget } from './lib/keyboard.ts';
@@ -75,6 +80,11 @@ import {
 } from './lib/sidebar-width.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
 import type {
+  ChangedFile,
+  DiffImageContentRequest,
+  DiffImageContentResult,
+  DiffSection,
+  DiffSectionContentRequest,
   GitIdentity,
   PullRequestMergeOptions,
   PullRequestGeneralComment,
@@ -97,6 +107,54 @@ const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
 const emptyGeneralCommentThreads: ReadonlyArray<PullRequestGeneralCommentThread> = [];
 const emptyPaths = new Set<string>();
 const emptyWalkthroughNotes = new Map();
+const createReviewContentState = (snapshot: SharedWalkthroughSnapshot) => ({
+  files: snapshot.files,
+  itemVersionByPath: {} as Readonly<Record<string, number>>,
+  loadingSectionIds: new Set<string>() as ReadonlySet<string>,
+  snapshot,
+});
+type ReviewContentState = ReturnType<typeof createReviewContentState>;
+
+const setReviewSectionLoading = (
+  current: ReviewContentState,
+  snapshot: SharedWalkthroughSnapshot,
+  sectionId: string,
+  loading: boolean,
+): ReviewContentState => {
+  if (current.snapshot !== snapshot) {
+    return current;
+  }
+  const loadingSectionIds = new Set(current.loadingSectionIds);
+  if (loading) {
+    loadingSectionIds.add(sectionId);
+  } else {
+    loadingSectionIds.delete(sectionId);
+  }
+  return { ...current, loadingSectionIds };
+};
+
+const updateReviewContentSection = (
+  current: ReviewContentState,
+  snapshot: SharedWalkthroughSnapshot,
+  file: ChangedFile,
+  section: DiffSection,
+  update: (current: DiffSection) => DiffSection,
+): ReviewContentState => {
+  if (current.snapshot !== snapshot) {
+    return current;
+  }
+  const files = updateDiffSection(current.files, file, section, update);
+  return files === current.files
+    ? current
+    : {
+        ...current,
+        files,
+        itemVersionByPath: {
+          ...current.itemVersionByPath,
+          [file.path]: (current.itemVersionByPath[file.path] ?? 0) + 1,
+        },
+      };
+};
 const readSharedSidebarWidth = () =>
   typeof localStorage === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : readSidebarWidth();
 
@@ -108,6 +166,11 @@ const writeSharedSidebarWidth = (width: number) => {
 
 export type ReviewWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
 export type ReviewMode = 'comments' | 'tree' | 'walkthrough';
+
+export type ReviewContentLoader = {
+  loadImageContent: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
+  loadSectionContent: (request: DiffSectionContentRequest) => Promise<DiffSection>;
+};
 
 const getSnapshotReviewComments = (
   snapshot: SharedWalkthroughSnapshot,
@@ -141,6 +204,7 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
 
 export type ReviewSurfaceProps = {
   commenting?: ReviewCommenting;
+  contentLoader?: ReviewContentLoader;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
   initialMode?: ReviewMode;
@@ -184,6 +248,7 @@ export type ReviewSurfaceProps = {
 
 export function ReviewSurface({
   commenting,
+  contentLoader,
   externalUrl,
   gitIdentity = null,
   initialMode,
@@ -199,6 +264,21 @@ export function ReviewSurface({
   sourceDescriptionFooterAside,
   title,
 }: ReviewSurfaceProps) {
+  const [reviewContentState, setReviewContentState] = useState(() =>
+    createReviewContentState(snapshot),
+  );
+  if (reviewContentState.snapshot !== snapshot) {
+    setReviewContentState(createReviewContentState(snapshot));
+  }
+  const activeReviewContentState =
+    reviewContentState.snapshot === snapshot
+      ? reviewContentState
+      : createReviewContentState(snapshot);
+  const { files: reviewFiles, loadingSectionIds } = activeReviewContentState;
+  const contentRequestIdRef = useRef(0);
+  const loadingSectionRequestsBySnapshotRef = useRef(
+    new WeakMap<SharedWalkthroughSnapshot, Map<string, number>>(),
+  );
   const canComment = commenting?.canComment ?? Boolean(interactive);
   const deleteShare = useCallback(async () => {
     if (
@@ -229,7 +309,7 @@ export function ReviewSurface({
   );
   const navigation = useNarrativeNavigation(
     sharedWalkthrough,
-    snapshot.files,
+    reviewFiles,
     `${snapshot.repository.root}:${getSourceKey(snapshot.repository.source)}`,
   );
   const keymap = useMemo(() => createDefaultConfig().keymap, []);
@@ -267,6 +347,17 @@ export function ReviewSurface({
   } = useReviewFileState({
     initialSelectedPath: snapshot.files[0]?.path ?? null,
   });
+  const reviewItemVersionByKey = useMemo(() => {
+    const contentVersions = activeReviewContentState.itemVersionByPath;
+    if (Object.keys(contentVersions).length === 0) {
+      return itemVersionByKey;
+    }
+    const next = { ...itemVersionByKey };
+    for (const [path, version] of Object.entries(contentVersions)) {
+      next[path] = (next[path] ?? 0) + version;
+    }
+    return next;
+  }, [activeReviewContentState.itemVersionByPath, itemVersionByKey]);
   const { resizeSidebar, sidebarWidth } = useResizableSidebar({
     collapseThreshold: SIDEBAR_COLLAPSE_THRESHOLD,
     onCollapse: () => setSidebarCollapsed(true),
@@ -341,12 +432,12 @@ export function ReviewSurface({
 
   const visibleFiles = useMemo(
     () =>
-      sortFiles(snapshot.files).filter(
+      sortFiles(reviewFiles).filter(
         (file) =>
           fuzzyMatches(file.path, fileSearchQuery) &&
           fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
       ),
-    [fileSearchQuery, snapshot.files, snapshot.preferences.showWhitespace],
+    [fileSearchQuery, reviewFiles, snapshot.preferences.showWhitespace],
   );
   const totalLineCount = useMemo(
     () =>
@@ -361,7 +452,7 @@ export function ReviewSurface({
       ? selectedPath
       : (visibleFiles[0]?.path ?? null);
   const initialMarkdownPreviewSectionIds = useMemo(() => {
-    const nonGeneratedFiles = snapshot.files.filter((file) => !isGeneratedWalkthroughFile(file));
+    const nonGeneratedFiles = reviewFiles.filter((file) => !isGeneratedWalkthroughFile(file));
     if (
       nonGeneratedFiles.length === 0 ||
       !nonGeneratedFiles.every((file) => isMarkdownFilePath(file.path))
@@ -370,11 +461,11 @@ export function ReviewSurface({
     }
 
     return new Set(
-      snapshot.files
+      reviewFiles
         .filter((file) => isMarkdownFilePath(file.path))
         .flatMap((file) => file.sections.map((section) => section.id)),
     );
-  }, [snapshot.files]);
+  }, [reviewFiles]);
 
   useDocumentAppearance({
     codeFontFamily: snapshot.preferences.codeFontFamily,
@@ -766,6 +857,109 @@ export function ReviewSurface({
   const diffLineHeight = getCodeFontLineHeight(
     normalizeCodeFontSizePreference(snapshot.preferences.codeFontSize),
   );
+  const beginSectionContentRequest = useCallback(
+    (file: ChangedFile, section: DiffSection) => {
+      const requestKey = getDiffSectionLoadKey(file, section);
+      let requests = loadingSectionRequestsBySnapshotRef.current.get(snapshot);
+      if (!requests) {
+        requests = new Map();
+        loadingSectionRequestsBySnapshotRef.current.set(snapshot, requests);
+      }
+      if (requests.has(requestKey)) {
+        return null;
+      }
+
+      const requestId = contentRequestIdRef.current + 1;
+      contentRequestIdRef.current = requestId;
+      requests.set(requestKey, requestId);
+      setReviewContentState((current) =>
+        setReviewSectionLoading(current, snapshot, section.id, true),
+      );
+
+      const isActive = () => requests.get(requestKey) === requestId;
+      return {
+        finish() {
+          if (!isActive()) {
+            return;
+          }
+          requests.delete(requestKey);
+          setReviewContentState((current) =>
+            setReviewSectionLoading(current, snapshot, section.id, false),
+          );
+        },
+        isActive,
+      };
+    },
+    [snapshot],
+  );
+  const applyReviewSectionUpdate = useCallback(
+    (file: ChangedFile, section: DiffSection, update: (current: DiffSection) => DiffSection) => {
+      setReviewContentState((current) =>
+        updateReviewContentSection(current, snapshot, file, section, update),
+      );
+    },
+    [snapshot],
+  );
+  const loadDeferredSection = useCallback(
+    async (file: ChangedFile, section: DiffSection) => {
+      if (!contentLoader || !shouldLoadDiffSectionContents(section)) {
+        return;
+      }
+      const request = beginSectionContentRequest(file, section);
+      if (!request) {
+        return;
+      }
+
+      try {
+        const loadedSection = await contentLoader.loadSectionContent({
+          force: true,
+          kind: section.kind,
+          path: file.path,
+          showWhitespace: snapshot.preferences.showWhitespace,
+          source: snapshot.repository.source,
+        });
+        if (loadedSection.id !== section.id || loadedSection.kind !== section.kind) {
+          throw new Error(`Loaded section did not match '${section.id}'.`);
+        }
+        if (request.isActive()) {
+          applyReviewSectionUpdate(file, section, () => loadedSection);
+        }
+      } catch {
+        if (request.isActive()) {
+          applyReviewSectionUpdate(file, section, getFailedSectionLoadState);
+        }
+      } finally {
+        request.finish();
+      }
+    },
+    [applyReviewSectionUpdate, beginSectionContentRequest, contentLoader, snapshot],
+  );
+  const loadSectionContents = useCallback(
+    async (file: ChangedFile, section: DiffSection): Promise<FileDiffLoadedFiles> => {
+      if (!contentLoader) {
+        throw new Error(`Cannot load diff contents for '${file.path}'.`);
+      }
+      const loadedSection = await contentLoader.loadSectionContent({
+        force: true,
+        kind: section.kind,
+        path: file.path,
+        showWhitespace: snapshot.preferences.showWhitespace,
+        source: snapshot.repository.source,
+      });
+      if (
+        loadedSection.id !== section.id ||
+        loadedSection.kind !== section.kind ||
+        !loadedSection.newFile
+      ) {
+        throw new Error(`No file contents available for '${file.path}'.`);
+      }
+      return {
+        newFile: loadedSection.newFile,
+        oldFile: loadedSection.oldFile ?? null,
+      };
+    },
+    [contentLoader, snapshot.preferences.showWhitespace, snapshot.repository.source],
+  );
   const commonReviewProps = {
     activeSearchMatch: null,
     agentId: snapshot.walkthrough.agent,
@@ -784,13 +978,15 @@ export function ReviewSurface({
     hunkNavigation: null,
     initialMarkdownPreviewSectionIds,
     isReadOnly: !canComment,
-    itemVersionByKey,
+    itemVersionByKey: reviewItemVersionByKey,
     keymap,
-    loadingSectionIds: new Set<string>(),
+    loadingSectionIds,
     onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
-    onLoadSection: noop,
+    onLoadImageContent: contentLoader?.loadImageContent,
+    onLoadSection: contentLoader ? loadDeferredSection : undefined,
+    onLoadSectionContents: contentLoader ? loadSectionContents : undefined,
     onResolveThread: resolveDiscussion ?? noop,
     onSaveCommentEdit: updateExistingReviewComment,
     onSelectPathFromScroll: noop,
@@ -1182,7 +1378,7 @@ export function ReviewSurface({
         ) : walkthroughReady ? (
           <NarrativeWalkthroughView
             allowCommit={false}
-            files={snapshot.files}
+            files={reviewFiles}
             navigation={navigation}
             onActiveReviewTargetChange={noop}
             onCommit={disabledCommit}
