@@ -191,6 +191,12 @@ test('review shell styles assign expanded and collapsed grid columns explicitly'
   );
 });
 
+test('review surfaces own system theme tokens instead of inheriting host tokens', () => {
+  const css = readFileSync(resolve('core/App.css'), 'utf8');
+  const systemThemeSelectors = /:root,\s*\.app-shell,\s*\.plan-shell\s*\{/g;
+  expect(css.match(systemThemeSelectors)).toHaveLength(2);
+});
+
 test('share viewer shows the complete repository path when there is no repository link', async () => {
   const file = createChangedFile('src/app.ts');
   const source = { type: 'working-tree' } as const;
