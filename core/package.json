@@ -51,7 +51,8 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json",
+    "prepack": "vp run build"
   },
   "dependencies": {
     "@nkzw/mdx-editor": "^0.2.2",
