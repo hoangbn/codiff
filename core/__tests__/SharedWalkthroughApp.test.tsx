@@ -132,6 +132,39 @@ test('review top bar renders its leading control at the far left', async () => {
   container.remove();
 });
 
+test('review top bar places the mirrored sidebar toggle at the far right', async () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(
+      <ReviewTopBar
+        actions={<button className="review-action">Close</button>}
+        mode="tree"
+        modes={[{ icon: null, label: 'Tree', value: 'tree' }]}
+        onModeChange={() => {}}
+        onToggleSidebar={() => {}}
+        repository="cloudflare/voidzero/codiff-web"
+        sidebarCollapsed={false}
+        sidebarPosition="right"
+        toggleTitle="Collapse sidebar"
+      />,
+    );
+  });
+
+  const toggle = container.querySelector('.sidebar-toggle-button');
+  const leftRegion = container.querySelector('.review-top-bar-left');
+  const rightRegion = container.querySelector('.review-top-bar-right');
+  expect(toggle?.parentElement).toBe(rightRegion);
+  expect(rightRegion?.lastElementChild).toBe(toggle);
+  expect(leftRegion?.contains(toggle ?? null)).toBe(false);
+  expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBe('scale(-1, 1)');
+
+  await act(async () => root.unmount());
+  container.remove();
+});
+
 test('review surfaces place, mirror, collapse, and restore right sidebars', async () => {
   window.localStorage.clear();
   const snapshot = createSharedSnapshot();
@@ -145,19 +178,20 @@ test('review surfaces place, mirror, collapse, and restore right sidebars', asyn
 
   const rightPosition = 'right' satisfies SidebarPosition;
   await view.rerender(<ReviewSurface sidebarPosition={rightPosition} snapshot={snapshot} />);
+  const rightToggle = view.container.querySelector<HTMLButtonElement>('.sidebar-toggle-button');
   expect(shell?.dataset.sidebarPosition).toBe('right');
   expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
-  expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBe('scale(-1, 1)');
+  expect(rightToggle?.querySelector('svg')?.getAttribute('transform')).toBe('scale(-1, 1)');
 
-  await act(async () => toggle?.click());
+  await act(async () => rightToggle?.click());
   expect(shell?.classList.contains('sidebar-collapsed')).toBe(true);
   expect(shell?.style.gridTemplateColumns).toBe('');
-  expect(toggle?.getAttribute('aria-label')).toBe('Expand sidebar');
+  expect(rightToggle?.getAttribute('aria-label')).toBe('Expand sidebar');
 
-  await act(async () => toggle?.click());
+  await act(async () => rightToggle?.click());
   expect(shell?.classList.contains('sidebar-collapsed')).toBe(false);
   expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
-  expect(toggle?.getAttribute('aria-label')).toBe('Collapse sidebar');
+  expect(rightToggle?.getAttribute('aria-label')).toBe('Collapse sidebar');
 });
 
 test('tree review keeps the snapshot focus file ahead of alphabetical siblings', async () => {
