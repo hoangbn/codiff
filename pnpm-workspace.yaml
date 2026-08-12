@@ -44,5 +44,6 @@ peerDependencyRules:
     vite: '*'
     vitest: '*'
 trustPolicyExclude:
-  # Exact Electron Forge transitive required when pnpm prepares Codiff from Git.
+  # Exact dependencies required when pnpm prepares Codiff from Git.
+  - '@pierre/theme@1.1.0'
   - semver@5.7.2
