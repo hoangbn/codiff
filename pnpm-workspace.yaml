@@ -43,3 +43,6 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
+trustPolicyExclude:
+  # Exact Electron Forge transitive required when pnpm prepares Codiff from Git.
+  - semver@5.7.2
