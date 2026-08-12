@@ -16,7 +16,9 @@ overrides:
   vitest: 4.1.10
 
 patchedDependencies:
-  native-keymap@3.3.9: 385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3
+  native-keymap@3.3.9:
+    hash: 385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3
+    path: patches/native-keymap@3.3.9.patch
 
 importers:
 
