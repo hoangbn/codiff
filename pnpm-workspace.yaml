@@ -43,7 +43,6 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
-trustPolicyExclude:
-  # Exact dependencies required when pnpm prepares Codiff from Git.
-  - '@pierre/theme@1.1.0'
-  - semver@5.7.2
+# Keep trust downgrade checks for recent packages while allowing older dependencies
+# that predate consistent registry provenance when preparing Codiff from Git.
+trustPolicyIgnoreAfter: 43200
