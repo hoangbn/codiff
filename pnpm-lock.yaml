@@ -27,9 +27,6 @@ importers:
       electron-squirrel-startup:
         specifier: ^1.0.1
         version: 1.0.1
-      native-keymap:
-        specifier: ^3.3.9
-        version: 3.3.9(patch_hash=385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3)
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -115,6 +112,10 @@ importers:
       vitest:
         specifier: 4.1.10
         version: 4.1.10(@types/node@26.1.1)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.49.0)(tsx@4.23.1)(typescript@7.0.2))(jsdom@29.1.1(@noble/hashes@2.2.0))
+    optionalDependencies:
+      native-keymap:
+        specifier: ^3.3.9
+        version: 3.3.9(patch_hash=385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3)
 
   core:
     dependencies:
@@ -11980,7 +11981,8 @@ snapshots:
 
   napi-build-utils@2.0.0: {}
 
-  native-keymap@3.3.9(patch_hash=385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3): {}
+  native-keymap@3.3.9(patch_hash=385affd59fcaeb63b0596da3fca88c73b24116b7571e2ac0a4b8fe20500373b3):
+    optional: true
 
   natural-compare@1.4.0: {}
 
