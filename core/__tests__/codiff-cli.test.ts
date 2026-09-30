@@ -9,6 +9,7 @@ import {
   truncate,
   writeFile,
 } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -518,6 +519,67 @@ test('packaged terminal helper forwards --commit HEAD to Electron', async () => 
     repositoryPath,
   ]);
 });
+
+test.each(['..', '...'])('packaged helper delivers native %s range content', async (separator) => {
+  await using logger = await createFakeOpenLogger();
+  const repositoryPath = join(logger.directory, 'repo');
+  await mkdir(repositoryPath);
+  await git(repositoryPath, ['init']);
+  await writeFile(join(repositoryPath, 'shared.txt'), 'shared\n');
+  await git(repositoryPath, ['add', '.']);
+  await git(repositoryPath, ['commit', '-m', 'common']);
+  await git(repositoryPath, ['checkout', '-b', 'base']);
+  await writeFile(join(repositoryPath, 'base-only.txt'), 'base\n');
+  await git(repositoryPath, ['add', '.']);
+  await git(repositoryPath, ['commit', '-m', 'base']);
+  await git(repositoryPath, ['checkout', '-b', 'target', 'HEAD~']);
+  await writeFile(join(repositoryPath, 'target-only.txt'), 'target\n');
+  await git(repositoryPath, ['add', '.']);
+  await git(repositoryPath, ['commit', '-m', 'target']);
+  await writeFile(join(repositoryPath, 'untracked.txt'), 'not part of range\n');
+
+  await execFileAsync(resolve('bin/codiff-app'), [`base${separator}target`, repositoryPath], {
+    env: logger.env,
+  });
+  const args = ['Codiff', ...(await logger.readArgs()).slice(3)];
+  const require = createRequire(import.meta.url);
+  const {
+    getCommandLineLaunchOptions,
+    getCommandLineRepositoryPath,
+  } = require('../../electron/main/command-line.cjs');
+  const { readRepositoryState } = require('../../electron/git-state.cjs');
+  const launchOptions = getCommandLineLaunchOptions(args);
+  expect(launchOptions.source).toEqual({
+    base: 'base',
+    head: 'target',
+    symmetric: separator === '...',
+    type: 'range',
+  });
+  const state = await readRepositoryState(getCommandLineRepositoryPath(args), launchOptions.source);
+  expect(state.files.map((file: { path: string }) => file.path).sort()).toEqual(
+    separator === '..' ? ['base-only.txt', 'target-only.txt'] : ['target-only.txt'],
+  );
+});
+
+test.each(['bin/codiff-app', 'bin/codiff.js'])(
+  'desktop executable %s advertises its launch contract without opening',
+  async (entry) => {
+    await using logger = await createFakeOpenLogger();
+    const command = entry.endsWith('.js') ? process.execPath : resolve(entry);
+    const prefix = entry.endsWith('.js') ? [resolve(entry)] : [];
+    const help = await execFileAsync(command, [...prefix, '--help'], { env: logger.env });
+    expect(help.stdout).toContain('--capabilities');
+    expect(help.stdout).toContain('desktop-source-v1');
+    const result = await execFileAsync(command, [...prefix, '--capabilities'], { env: logger.env });
+    expect(JSON.parse(result.stdout)).toEqual({
+      sources: ['working-tree', 'commit', 'branch-working-tree', 'range', 'pull-request'],
+      version: 1,
+    });
+    await expect(readFile(join(logger.directory, 'open-args.txt'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  },
+);
 
 test('packaged terminal helper resolves GitHub PR branches to canonical URLs', async () => {
   await using logger = await createFakeOpenLogger();

@@ -198,6 +198,7 @@ show_help() {
   printf '  %-38s%s%s%s\n' "--agent <codex|claude|opencode|pi>" "$gray" "Override the agent backend for this session." "$reset"
   printf '  %-38s%s%s%s\n' "--branch <ref>" "$gray" "Review the current branch against a target branch." "$reset"
   printf '  %-38s%s%s%s\n' "--commit <ref>" "$gray" "Review a specific commit." "$reset"
+  printf '  %-38s%s%s%s\n' "--capabilities" "$gray" "Print desktop-source-v1 launch capabilities, then exit." "$reset"
   printf '  %-38s%s%s%s\n' "--codex-session <id>" "$gray" "Attach Codex session metadata to a walkthrough." "$reset"
   printf '  %-38s%s%s%s\n' "--claude-session <id>" "$gray" "Attach Claude Code session metadata to a walkthrough." "$reset"
   printf '  %-38s%s%s%s\n' "--completions <bash|fish|zsh>" "$gray" "Print a shell completion script, then exit." "$reset"
@@ -272,6 +273,7 @@ pull_request_source=""
 pull_request_branch=""
 pull_request_provider=""
 source_ref=""
+range_ref=""
 walkthrough_context_path=""
 walkthrough_file_path=""
 plan_file_path=""
@@ -427,6 +429,10 @@ for arg in "$@"; do
   fi
 
   case "$arg" in
+    --capabilities)
+      printf '%s\n' '{"version":1,"sources":["working-tree","commit","branch-working-tree","range","pull-request"]}'
+      exit 0
+      ;;
     --help|-h)
       show_help
       exit 0
@@ -557,7 +563,16 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
     *) repository_context="$PWD/$repository_context" ;;
   esac
 
-  if is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
+  if printf '%s' "$source_ref" | grep -Eq '^[^.[:space:]][^[:space:]]*\.\.?\.[^.[:space:]][^[:space:]]*$'; then
+    range_base="${source_ref%%..*}"
+    range_head="${source_ref#*..}"
+    range_head="${range_head#.}"
+    if ! is_git_commit_ref "$repository_context" "$range_base" || ! is_git_commit_ref "$repository_context" "$range_head"; then
+      printf '%s\n' "codiff: invalid range: $source_ref" >&2
+      exit 1
+    fi
+    range_ref="$source_ref"
+  elif is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
     commit_ref="$source_ref"
   elif is_git_branch_ref "$repository_context" "$source_ref"; then
     branch_ref="$source_ref"
@@ -705,6 +720,10 @@ elif [ -n "$pull_request_source" ] && [ "$walkthrough" -eq 1 ]; then
   open_codiff --walkthrough "$pull_request_source" "$repository_path"
 elif [ -n "$pull_request_source" ]; then
   open_codiff "$pull_request_source" "$repository_path"
+elif [ -n "$range_ref" ] && [ "$walkthrough" -eq 1 ]; then
+  open_codiff --walkthrough "$range_ref" "$repository_path"
+elif [ -n "$range_ref" ]; then
+  open_codiff "$range_ref" "$repository_path"
 elif [ -n "$commit_ref" ] && [ "$walkthrough" -eq 1 ]; then
   open_codiff --walkthrough --commit "$commit_ref" "$repository_path"
 elif [ -n "$commit_ref" ]; then
