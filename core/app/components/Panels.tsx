@@ -103,8 +103,10 @@ export function UpdatePill({
   }
 
   const actionable = phase === 'available' || phase === 'error';
-  const applyEffect =
-    strategy === 'squirrel'
+  const fork = strategy === 'fork';
+  const applyEffect = fork
+    ? 'Runs Codex with full local access to rebase the fork, build, reinstall and restart this app.'
+    : strategy === 'squirrel'
       ? 'Downloads the update and restarts the app.'
       : strategy === 'download'
         ? 'Downloads and opens the update. Quit Codiff to finish installing.'
@@ -113,14 +115,18 @@ export function UpdatePill({
           : 'Downloads the update.';
   const title =
     phase === 'available'
-      ? `Update Codiff${version ? ` v${currentVersion} -> v${version}` : ''}. ${applyEffect}`
+      ? `${fork ? 'Update Fork' : 'Update Codiff'}${version ? ` v${currentVersion} -> v${version}` : ''}. ${applyEffect}`
       : phase === 'updating'
-        ? version
-          ? `Updating to Codiff ${version}…`
-          : 'Updating Codiff…'
-        : phase === 'installerReady'
-          ? 'The installer was downloaded and opened. Quit Codiff to finish updating.'
-          : `${message ?? 'Something went wrong while updating.'} Click to try again.`;
+        ? fork
+          ? (message ?? 'Codex is updating the fork…')
+          : version
+            ? `Updating to Codiff ${version}…`
+            : 'Updating Codiff…'
+        : phase === 'updated'
+          ? (message ?? 'The fork update completed.')
+          : phase === 'installerReady'
+            ? 'The installer was downloaded and opened. Quit Codiff to finish updating.'
+            : `${message ?? 'Something went wrong while updating.'} Click to try again.`;
 
   return (
     <div aria-live="polite" className="update-pill-anchor">
@@ -138,15 +144,23 @@ export function UpdatePill({
         ) : null}
         <span>
           {phase === 'available'
-            ? 'Update'
+            ? fork
+              ? 'Update Fork'
+              : 'Update'
             : phase === 'updating'
-              ? 'Updating…'
-              : phase === 'installerReady'
-                ? 'Quit to finish update'
-                : 'Update failed. Try again'}
+              ? fork
+                ? 'Updating Fork…'
+                : 'Updating…'
+              : phase === 'updated'
+                ? 'Fork Updated'
+                : phase === 'installerReady'
+                  ? 'Quit to finish update'
+                  : fork
+                    ? 'Retry Fork Update'
+                    : 'Update failed. Try again'}
         </span>
       </Button>
-      {actionable && onDismiss ? (
+      {(actionable || phase === 'updated') && onDismiss ? (
         <button
           aria-label="Dismiss update"
           className="update-pill-dismiss"
