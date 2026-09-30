@@ -400,6 +400,60 @@ const resolveMergeRequestContentRefs = async (repoRoot, mergeRequest, metadata) 
   return mergeBase ? { base: mergeBase, head } : null;
 };
 
+/**
+ * @param {string} launchPath
+ * @param {Extract<ReviewSource, {type: 'pull-request'}>} source
+ * @param {string} requestedPath
+ * @param {{force?: boolean}} [options]
+ * @returns {Promise<import('../../core/types.ts').DiffSection>}
+ */
+const readMergeRequestSectionContent = async (launchPath, source, requestedPath, options = {}) => {
+  const path = validateRepositoryPath(requestedPath);
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  const mergeRequest = parseGitLabMergeRequestUrl(source.url);
+  selectMergeRequestRemote(repoRoot, mergeRequest);
+  const [metadata, diffs] = await Promise.all([
+    readMergeRequestMetadata(repoRoot, mergeRequest),
+    readMergeRequestDiffs(repoRoot, mergeRequest),
+  ]);
+  const rawDiff = diffs.find((candidate) => candidate.new_path === path);
+  if (!rawDiff) {
+    throw new Error('File is not part of this merge request.');
+  }
+  const refs = await resolveMergeRequestContentRefs(repoRoot, mergeRequest, metadata);
+  if (!refs) {
+    throw new Error('Codiff could not resolve full contents for this merge request.');
+  }
+  const file = normalizeGitLabDiffFile(rawDiff);
+  const oldPath = file.previous_filename || file.filename;
+  const [oldFiles, newFiles] = await Promise.all([
+    readGitFiles(repoRoot, refs.base, [oldPath], { ...options, refScopedEmptyCacheKey: true }),
+    readGitFiles(repoRoot, refs.head, [file.filename], {
+      ...options,
+      refScopedEmptyCacheKey: true,
+    }),
+  ]);
+  const oldFile = oldFiles.get(oldPath);
+  const newFile = newFiles.get(file.filename);
+  if (
+    (file.status !== 'added' && oldFile?.file?.cacheKey === `${refs.base}:${oldPath}:empty`) ||
+    (file.status !== 'removed' && newFile?.file?.cacheKey === `${refs.head}:${file.filename}:empty`)
+  ) {
+    throw new Error('Codiff could not load full contents for this merge request file.');
+  }
+  const section = createPullRequestSection(
+    mergeRequest,
+    file,
+    createPatchFromPullRequestFile(file),
+    oldFile,
+    newFile,
+  );
+  if (!section.binary && section.loadState === 'ready' && !section.oldFile && !section.newFile) {
+    throw new Error('Codiff could not load full contents for this merge request file.');
+  }
+  return section;
+};
+
 /** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source */
 const readMergeRequestState = async (launchPath, source) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
@@ -751,6 +805,7 @@ module.exports = {
   normalizeGitLabReviewComment,
   parseGitLabMergeRequestUrl,
   readMergeRequestImageContent,
+  readMergeRequestSectionContent,
   readMergeRequestState,
   submitMergeRequestComment,
   submitMergeRequestReview,

@@ -801,8 +801,14 @@ const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) =>
   // Expandable context can only be rendered when both sides' contents are present.
   const attemptedContent = oldFile != null && newFile != null;
 
-  if (attemptedContent && !patchBinary) {
-    const summary = summarizeContent(oldFile, newFile);
+  if (attemptedContent && !BINARY_DIFF_MARKER.test(patch)) {
+    const summary =
+      newFile.loadState === 'too-large'
+        ? summarizeContent(newFile, oldFile)
+        : summarizeContent(oldFile, newFile);
+    if (summary.loadState !== 'ready') {
+      return { ...summary, id, kind: 'pull-request', patch };
+    }
     const status = normalizePullRequestFileStatus(file.status);
     const oldContents = oldFile.file?.contents ?? '';
     const newContents = newFile.file?.contents ?? '';
@@ -824,8 +830,6 @@ const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) =>
     }
   }
 
-  // Pull request contents are loaded up front, so a file that falls back to its
-  // patch (binary, oversized, or refs unavailable) cannot be loaded on demand.
   return {
     binary: patchBinary,
     id,
@@ -837,6 +841,56 @@ const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) =>
       { canLoad: false },
     ),
   };
+};
+
+/**
+ * @param {string} launchPath
+ * @param {Extract<ReviewSource, {type: 'pull-request'}>} source
+ * @param {string} requestedPath
+ * @param {{force?: boolean}} [options]
+ * @returns {Promise<import('../../core/types.ts').DiffSection>}
+ */
+const readPullRequestSectionContent = async (launchPath, source, requestedPath, options = {}) => {
+  const path = validateRepositoryPath(requestedPath);
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  const pullRequest = parseGitHubPullRequestUrl(source.url);
+  const [metadata, files, diff] = await Promise.all([
+    readPullRequestMetadata(repoRoot, pullRequest),
+    readPullRequestFiles(repoRoot, pullRequest),
+    readPullRequestDiff(repoRoot, pullRequest),
+  ]);
+  const file = files.find((candidate) => candidate.filename === path);
+  if (!file) {
+    throw new Error('File is not part of this pull request.');
+  }
+  const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
+  const refs = await resolvePullRequestContentRefs(repoRoot, pullRequest, metadata, remote);
+  if (!refs) {
+    throw new Error('Codiff could not resolve full contents for this pull request.');
+  }
+  const oldPath = file.previous_filename || file.filename;
+  const [oldFiles, newFiles] = await Promise.all([
+    readGitFiles(repoRoot, refs.base, [oldPath], { ...options, refScopedEmptyCacheKey: true }),
+    readGitFiles(repoRoot, refs.head, [file.filename], {
+      ...options,
+      refScopedEmptyCacheKey: true,
+    }),
+  ]);
+  const oldFile = oldFiles.get(oldPath);
+  const newFile = newFiles.get(file.filename);
+  if (
+    (file.status !== 'added' && oldFile?.file?.cacheKey === `${refs.base}:${oldPath}:empty`) ||
+    (file.status !== 'removed' && newFile?.file?.cacheKey === `${refs.head}:${file.filename}:empty`)
+  ) {
+    throw new Error('Codiff could not load full contents for this pull request file.');
+  }
+  const patch =
+    splitPullRequestDiff(diff).get(file.filename) || createPatchFromPullRequestFile(file);
+  const section = createPullRequestSection(pullRequest, file, patch, oldFile, newFile);
+  if (!section.binary && section.loadState === 'ready' && !section.oldFile && !section.newFile) {
+    throw new Error('Codiff could not load full contents for this pull request file.');
+  }
+  return section;
 };
 
 /** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @returns {Promise<RepositoryState>} */
@@ -855,7 +909,7 @@ const readPullRequestState = async (launchPath, source) => {
   // Load every file's base and head contents up front from the local refs, so
   // each diff renders in its final collapsed layout immediately and never shifts
   // as expandable context becomes available. Files larger than the eager limit
-  // stay patch-only.
+  // retain their native deferred or too-large summaries.
   const contentRefs = await resolvePullRequestContentRefs(
     repoRoot,
     pullRequest,
@@ -1118,6 +1172,7 @@ module.exports = {
   normalizePullRequestComment,
   parseGitHubPullRequestUrl,
   readPullRequestImageContent,
+  readPullRequestSectionContent,
   readPullRequestState,
   resolvePullRequestContentRefs,
   selectPullRequestRemote,
