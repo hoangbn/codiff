@@ -4,6 +4,7 @@
 
 import { act } from 'react';
 import { expect, test, vi } from 'vite-plus/test';
+import { getVisibleDiffSections } from '../lib/diff.ts';
 import { ReviewSurface, type ReviewContentLoader } from '../react.ts';
 import type { ChangedFile, DiffSection, SharedWalkthroughSnapshot } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
@@ -101,6 +102,116 @@ const unavailableImage = async () => ({
   status: 'unavailable' as const,
 });
 
+const getContextExpansionButton = (container: HTMLElement) =>
+  [...container.querySelectorAll('diffs-container')]
+    .map((host) => host.shadowRoot?.querySelector<HTMLElement>('[data-expand-button]'))
+    .find((button) => button != null);
+
+test.each(['rejected', 'missing contents'] as const)(
+  'manual context loading reports %s and retries without replacing the patch diff',
+  async (failure) => {
+    const file = createChangedFile('src/context.ts', {
+      patch:
+        'diff --git a/src/context.ts b/src/context.ts\n--- a/src/context.ts\n+++ b/src/context.ts\n@@ -2,3 +2,3 @@\n b\n-c\n+C\n d\n',
+    });
+    const section = file.sections[0]!;
+    const fileDiff = getVisibleDiffSections(file, false)[0]!.fileDiff;
+    let resolveSection!: (section: DiffSection) => void;
+    let rejectSection!: (error: Error) => void;
+    const contentLoader = {
+      loadImageContent: vi.fn(unavailableImage),
+      loadSectionContent: vi.fn(
+        () =>
+          new Promise<DiffSection>((resolve, reject) => {
+            resolveSection = resolve;
+            rejectSection = reject;
+          }),
+      ),
+    } satisfies ReviewContentLoader;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await using view = await renderReact(
+        <ReviewSurface
+          contentLoader={contentLoader}
+          initialMode="tree"
+          snapshot={createSnapshot([file])}
+        />,
+      );
+      await waitFor(() => expect(getContextExpansionButton(view.container)).toBeDefined());
+      await act(async () => getContextExpansionButton(view.container)?.click());
+      await waitFor(() => {
+        expect(contentLoader.loadSectionContent).toHaveBeenCalledOnce();
+        expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
+          'Loading full file context...',
+        );
+      });
+      expect(contentLoader.loadSectionContent).toHaveBeenCalledWith({
+        force: true,
+        kind: 'unstaged',
+        path: file.path,
+        showWhitespace: false,
+        source: { type: 'working-tree' },
+      });
+
+      await act(async () => {
+        if (failure === 'rejected') {
+          rejectSection(new Error('Repository Review content is unavailable.'));
+        } else {
+          resolveSection({
+            ...section,
+            loadState: 'error',
+            summary: { canLoad: false, reason: 'Repository Review content is unavailable.' },
+          });
+        }
+      });
+      await waitFor(() => {
+        expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
+          'Full file context is unavailable.',
+        );
+        expect(
+          view.container.querySelector('[title="Retry loading full file context"]'),
+        ).not.toBeNull();
+      });
+      expect(fileDiff.isPartial).toBe(true);
+      expect(getVisibleDiffSections(file, false)[0]!.fileDiff).toBe(fileDiff);
+      expect(file.sections[0]).toBe(section);
+      expect(fileDiff.additionLines.join('')).toContain('C');
+      expect(fileDiff.deletionLines.join('')).toContain('c');
+
+      await act(async () =>
+        view.container
+          .querySelector<HTMLButtonElement>('[title="Retry loading full file context"]')
+          ?.click(),
+      );
+      await waitFor(() => {
+        expect(contentLoader.loadSectionContent).toHaveBeenCalledTimes(2);
+        expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
+          'Loading full file context...',
+        );
+        expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      });
+      await act(async () =>
+        resolveSection({
+          ...section,
+          loadState: 'ready',
+          newFile: { contents: 'before\nb\nC\nd\nafter\n', name: file.path },
+          oldFile: { contents: 'before\nb\nc\nd\nafter\n', name: file.path },
+        }),
+      );
+      await waitFor(() => {
+        expect(fileDiff.isPartial).toBe(false);
+        expect(view.container.querySelector('[role="status"]')).toBeNull();
+        expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      });
+      expect(getVisibleDiffSections(file, false)[0]!.fileDiff).toBe(fileDiff);
+      expect(file.sections[0]).toBe(section);
+      expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
+  },
+);
+
 test('a read-only review surface loads a deferred text section', async () => {
   const file = createDeferredFile('src/large.ts');
   let resolveSection!: (section: DiffSection) => void;
@@ -124,8 +235,12 @@ test('a read-only review surface loads a deferred text section', async () => {
   expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
   expect(view.container.querySelector('[title="Open file in editor"]')).toBeNull();
 
-  await act(async () => loadButton?.click());
+  await act(async () => {
+    loadButton?.click();
+    loadButton?.click();
+  });
   await waitFor(() => expect(loadButton?.textContent).toBe('Loading...'));
+  expect(contentLoader.loadSectionContent).toHaveBeenCalledOnce();
   expect(contentLoader.loadSectionContent).toHaveBeenCalledWith({
     force: true,
     kind: 'unstaged',

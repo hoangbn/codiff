@@ -70,38 +70,28 @@ export function useReviewContentController({
     setState(createReviewContentState(snapshot));
   }
   const activeState = state.snapshot === snapshot ? state : createReviewContentState(snapshot);
-  const contentRequestIdRef = useRef(0);
-  const loadingSectionRequestsBySnapshotRef = useRef(
-    new WeakMap<SharedWalkthroughSnapshot, Map<string, number>>(),
+  const loadingSectionKeysBySnapshotRef = useRef(
+    new WeakMap<SharedWalkthroughSnapshot, Set<string>>(),
   );
 
   const beginSectionContentRequest = useCallback(
     (file: ChangedFile, section: DiffSection) => {
       const requestKey = getDiffSectionLoadKey(file, section);
-      let requests = loadingSectionRequestsBySnapshotRef.current.get(snapshot);
+      let requests = loadingSectionKeysBySnapshotRef.current.get(snapshot);
       if (!requests) {
-        requests = new Map();
-        loadingSectionRequestsBySnapshotRef.current.set(snapshot, requests);
+        requests = new Set();
+        loadingSectionKeysBySnapshotRef.current.set(snapshot, requests);
       }
       if (requests.has(requestKey)) {
         return null;
       }
 
-      const requestId = contentRequestIdRef.current + 1;
-      contentRequestIdRef.current = requestId;
-      requests.set(requestKey, requestId);
+      requests.add(requestKey);
       setState((current) => setReviewSectionLoading(current, snapshot, section.id, true));
 
-      const isActive = () => requests.get(requestKey) === requestId;
-      return {
-        finish() {
-          if (!isActive()) {
-            return;
-          }
-          requests.delete(requestKey);
-          setState((current) => setReviewSectionLoading(current, snapshot, section.id, false));
-        },
-        isActive,
+      return () => {
+        requests.delete(requestKey);
+        setState((current) => setReviewSectionLoading(current, snapshot, section.id, false));
       };
     },
     [snapshot],
@@ -132,8 +122,8 @@ export function useReviewContentController({
       if (!contentLoader || !shouldLoadDiffSectionContents(section)) {
         return;
       }
-      const request = beginSectionContentRequest(file, section);
-      if (!request) {
+      const finishRequest = beginSectionContentRequest(file, section);
+      if (!finishRequest) {
         return;
       }
 
@@ -142,15 +132,11 @@ export function useReviewContentController({
         if (loadedSection.id !== section.id || loadedSection.kind !== section.kind) {
           throw new Error(`Loaded section did not match '${section.id}'.`);
         }
-        if (request.isActive()) {
-          applyReviewSectionUpdate(file, section, () => loadedSection);
-        }
+        applyReviewSectionUpdate(file, section, () => loadedSection);
       } catch {
-        if (request.isActive()) {
-          applyReviewSectionUpdate(file, section, getFailedSectionLoadState);
-        }
+        applyReviewSectionUpdate(file, section, getFailedSectionLoadState);
       } finally {
-        request.finish();
+        finishRequest();
       }
     },
     [applyReviewSectionUpdate, beginSectionContentRequest, contentLoader, requestSectionContent],
