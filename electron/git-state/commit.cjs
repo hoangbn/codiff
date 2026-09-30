@@ -1,6 +1,7 @@
 // @ts-check
 
 const { fileSort, getFingerprint, getGravatarHash, git, normalizeStatus } = require('./common.cjs');
+const { getCommitRevision } = require('../git-revision.cjs');
 const {
   readComparisonImageContent,
   readComparisonSectionContent,
@@ -112,7 +113,7 @@ const resolveRangeEndpoint = async (repoRoot, ref) => {
     }
   }
 
-  return (await git(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+  return (await git(repoRoot, ['rev-parse', '--verify', getCommitRevision(ref)])).trim();
 };
 
 /**
@@ -257,7 +258,7 @@ const resolveBranchComparison = async (repoRoot, source) => {
 const resolveComparisonSource = async (repoRoot, source) => {
   if (source.type === 'commit') {
     const commit = (
-      await git(repoRoot, ['rev-parse', '--verify', `${source.ref}^{commit}`])
+      await git(repoRoot, ['rev-parse', '--verify', getCommitRevision(source.ref)])
     ).trim();
     const [firstParent] = await readCommitParents(repoRoot, commit);
     return {
@@ -688,7 +689,7 @@ const listRepositoryHistory = async (launchPath, limit = 200, ref = 'HEAD') => {
     if (ref.includes('..')) {
       await git(repoRoot, ['rev-list', '--max-count=1', ref]);
     } else {
-      await git(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
+      await git(repoRoot, ['rev-parse', '--verify', getCommitRevision(ref)]);
     }
   } catch {
     return {

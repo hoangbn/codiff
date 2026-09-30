@@ -2,10 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import gitRevision from '../electron/git-revision.cjs';
 import launchSelectors from '../electron/launch-selectors.cjs';
 import reviewSource from '../electron/review-source.cjs';
 
 const { parseReviewUrl, resolveReviewUrl } = reviewSource;
+const { getCommitRevision } = gitRevision;
 const { getReviewPositionals, validateReviewSelectors, validateSourceFlags } = launchSelectors;
 
 export const flagDefinitions = [
@@ -254,7 +256,7 @@ const isBranchRef = (repositoryPath, ref) =>
   gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/remotes/${ref}`]);
 
 const isCommitRef = (repositoryPath, ref) =>
-  gitSucceeds(repositoryPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  gitSucceeds(repositoryPath, ['rev-parse', '--verify', getCommitRevision(ref)]);
 
 const resolveSourceCandidate = (repositoryPath, ref) =>
   isCommitRefArgument(ref) && isCommitRef(repositoryPath, ref)

@@ -563,16 +563,18 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
 });
 
 test.each([
-  ':/feature..message|fallback',
+  ':/feature..message',
   'HEAD^{/..}',
   'HEAD^{/.. }',
   'HEAD^{/.*.. .*}',
   'HEAD~1..HEAD^{/..}',
   'HEAD~1..HEAD^{/.. }',
   'HEAD~1..HEAD^{/.*.. .*}',
+  'HEAD~1..:/feature..message',
   'HEAD~1...HEAD^{/..}',
   'HEAD~1...HEAD^{/.. }',
   'HEAD~1...HEAD^{/.*.. .*}',
+  'HEAD~1...:/feature..message',
 ])(
   'dotted revision %s preserves native source content through every launch entry',
   async (target) => {
@@ -591,7 +593,7 @@ test.each([
     const range = target.startsWith('HEAD~1..');
     const separator = target.startsWith('HEAD~1...') ? '...' : '..';
     const head = range ? target.slice(`HEAD~1${separator}`.length) : target;
-    await git(repositoryPath, ['rev-parse', '--verify', `${head}^{commit}`]);
+    await git(repositoryPath, ['rev-parse', '--verify', head]);
     if (range) {
       await git(repositoryPath, ['rev-parse', '--symbolic', target]);
     }

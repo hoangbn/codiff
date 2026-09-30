@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const { resolve } = require('node:path');
 const { parseArgs } = require('node:util');
+const { getCommitRevision } = require('../git-revision.cjs');
 const { readWalkthroughContext } = require('../walkthrough-context.cjs');
 const { parseReviewUrl, resolveReviewUrl } = require('../review-source.cjs');
 const {
@@ -68,7 +69,7 @@ const isBranchRef = (repositoryPath, ref) =>
 
 /** @param {string} repositoryPath @param {string} ref */
 const isCommitRef = (repositoryPath, ref) =>
-  gitSucceeds(repositoryPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  gitSucceeds(repositoryPath, ['rev-parse', '--verify', getCommitRevision(ref)]);
 
 /** @param {string} repositoryPath @param {string} ref */
 const resolveSourceCandidate = (repositoryPath, ref) =>

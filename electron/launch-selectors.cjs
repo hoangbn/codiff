@@ -1,6 +1,7 @@
 const { execFileSync } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const { resolve } = require('node:path');
+const { getCommitRevision } = require('./git-revision.cjs');
 
 const validateSourceFlags = (tokens) => {
   const names = new Set();
@@ -40,7 +41,7 @@ const getReviewPositionals = (positionals) => {
   if (
     explicitPaths.length === 0 &&
     positionals.length === 1 &&
-    gitSucceeds(process.cwd(), ['rev-parse', '--verify', `${positionals[0]}^{commit}`])
+    gitSucceeds(process.cwd(), ['rev-parse', '--verify', getCommitRevision(positionals[0])])
   ) {
     return { repositoryPath: undefined, sourceCandidates: positionals };
   }

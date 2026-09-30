@@ -338,7 +338,11 @@ is_git_branch_ref() {
 }
 
 is_git_commit_ref() {
-  git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1
+  case "$2" in
+    :/*) commit_revision="$2" ;;
+    *) commit_revision="$2^{commit}" ;;
+  esac
+  git -C "$1" rev-parse --verify "$commit_revision" >/dev/null 2>&1
 }
 
 is_git_repository() {
