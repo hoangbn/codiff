@@ -112,6 +112,12 @@ test('window identities resolve commit refs to the same commit sha', async () =>
 
   expect(
     getWindowIdentity(directory.path, {
+      source: { ref: ':/initial', type: 'commit' },
+    })?.sourceKey,
+  ).toBe(`commit:${head}`);
+
+  expect(
+    getWindowIdentity(directory.path, {
       source: { ref: 'HEAD', type: 'commit' },
     })?.sourceKey,
   ).toBe(`commit:${head}`);
