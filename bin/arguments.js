@@ -427,16 +427,7 @@ export const parseArguments = (args) => {
   }
 
   const repositoryPath = resolve(requestedPath ?? process.cwd());
-  let range = null;
-  if (rangeCandidate) {
-    // Only honor the range when both ends resolve in this repository; otherwise
-    // fall back so a stray `a..b`-shaped argument isn't silently misread.
-    range =
-      isCommitRef(repositoryPath, rangeCandidate.base) &&
-      isCommitRef(repositoryPath, rangeCandidate.head)
-        ? rangeCandidate
-        : null;
-  }
+  const range = rangeCandidate;
   if (!range && !commitRef && !branchRef && sourceCandidate) {
     const source = resolveSourceCandidate(repositoryPath, sourceCandidate);
     if (source?.branchRef) {

@@ -19,7 +19,13 @@ The helper forwards a positional `base..head` or `base...head` unchanged to
 Electron, after validating both revisions in the selected repository. It never
 turns a range into `--branch` or `--commit`. Direct ranges compare endpoints;
 three-dot ranges compare the merge base against the head. Neither includes local
-edits. Invalid range revisions fail before opening the application.
+edits. Invalid range revisions passed to the shell helper fail before opening
+the application.
+
+Both the Node launcher and native Electron entry retain explicit range identity
+even when an endpoint does not resolve. The Git-state loader reports that error
+instead of loading the working tree. This also covers a ref disappearing after
+the shell helper validates it but before Electron resolves it.
 
 The executable contract proof in `core/__tests__/codiff-cli.test.ts` launches the
 helper, feeds its actual Electron arguments through the native application entry,
