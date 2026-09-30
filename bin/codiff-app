@@ -565,7 +565,7 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
 
   if is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
     commit_ref="$source_ref"
-  elif printf '%s' "$source_ref" | grep -Eq '^[^.[:space:]][^[:space:]]*\.\.?\.[^.[:space:]][^[:space:]]*$'; then
+  elif [ "${source_ref#*..}" != "$source_ref" ]; then
     range_base="${source_ref%%..*}"
     range_head="${source_ref#*..}"
     range_head="${range_head#.}"
