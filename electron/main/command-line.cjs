@@ -30,7 +30,7 @@ const isExplicitPathArgument = (arg) =>
   arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../');
 
 // `base...head` (symmetric / merge-base) or `base..head` (direct) range syntax.
-const rangeArgumentPattern = /^([^.][^\s]*?)(\.\.\.?)([^.][^\s]*)$/;
+const rangeArgumentPattern = /^([^.].*?)(\.\.\.?)([^.].*)$/s;
 /** @param {string} arg @returns {{ base: string; head: string; symmetric: boolean } | null} */
 const parseRangeArgument = (arg) => {
   if (isExplicitPathArgument(arg)) {
@@ -182,7 +182,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     if (!rangeCandidate && !commitRef && !branchRef && !sourceCandidate) {
       const parsedRange = parseRangeArgument(arg);
       if (parsedRange) {
-        rangeCandidate = parsedRange;
+        rangeCandidate = arg;
         continue;
       }
     }
@@ -206,14 +206,26 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       }
     }
 
-    if (!commitRef && !branchRef && !sourceCandidate && !isExplicitPathArgument(arg)) {
+    if (
+      !rangeCandidate &&
+      !commitRef &&
+      !branchRef &&
+      !sourceCandidate &&
+      !isExplicitPathArgument(arg)
+    ) {
       sourceCandidate = arg;
     } else if (repositoryPath == null) {
       repositoryPath = arg;
     }
   }
 
-  const range = rangeCandidate;
+  const range =
+    rangeCandidate && !isCommitRef(resolve(repositoryPath || process.cwd()), rangeCandidate)
+      ? parseRangeArgument(rangeCandidate)
+      : null;
+  if (rangeCandidate && !range) {
+    commitRef = rangeCandidate;
+  }
 
   if (!range && !commitRef && !branchRef && sourceCandidate) {
     const source = resolveSourceCandidate(

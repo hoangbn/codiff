@@ -563,7 +563,9 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
     *) repository_context="$PWD/$repository_context" ;;
   esac
 
-  if printf '%s' "$source_ref" | grep -Eq '^[^.[:space:]][^[:space:]]*\.\.?\.[^.[:space:]][^[:space:]]*$'; then
+  if is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
+    commit_ref="$source_ref"
+  elif [ "${source_ref#*..}" != "$source_ref" ]; then
     range_base="${source_ref%%..*}"
     range_head="${source_ref#*..}"
     range_head="${range_head#.}"
@@ -572,8 +574,6 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
       exit 1
     fi
     range_ref="$source_ref"
-  elif is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
-    commit_ref="$source_ref"
   elif is_git_branch_ref "$repository_context" "$source_ref"; then
     branch_ref="$source_ref"
   elif is_git_commit_ref "$repository_context" "$source_ref" || is_commit_ref_arg "$source_ref"; then
