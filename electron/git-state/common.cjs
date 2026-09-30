@@ -3,7 +3,7 @@
 const { execFile, spawn } = require('node:child_process');
 const { promises: fs } = require('node:fs');
 const { createHash } = require('node:crypto');
-const { isAbsolute, join, normalize, sep } = require('node:path');
+const { isAbsolute, join, posix } = require('node:path');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
@@ -22,7 +22,7 @@ const execFileAsync = promisify(execFile);
  * @typedef {'staged' | 'unstaged'} WorkingTreeSectionKind
  * @typedef {{cacheKey: string; contents: string; name: string}} TextFile
  * @typedef {{reason: string; canLoad?: boolean; fileCount?: number; fingerprint?: string; limit?: number; loadState?: DiffSection['loadState']; size?: number}} DiffSummary
- * @typedef {{binary: boolean; file?: TextFile; fingerprint?: string; loadState?: DiffSection['loadState']; summary?: DiffSummary}} FileContentResult
+ * @typedef {{available?: boolean; binary: boolean; file?: TextFile; fingerprint?: string; loadState?: DiffSection['loadState']; summary?: DiffSummary}} FileContentResult
  * @typedef {{
  *   conflictStage?: 1 | 2 | 3;
  *   directory?: boolean;
@@ -305,13 +305,16 @@ const validateRepositoryPath = (path) => {
     throw new Error('Invalid repository path.');
   }
 
-  const normalized = normalize(path);
-  if (normalized === '.' || normalized === '..' || normalized.startsWith(`..${sep}`)) {
+  const normalized = posix.normalize(path);
+  if (normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
     throw new Error('Invalid repository path.');
   }
 
   return normalized;
 };
+
+/** @param {string} path */
+const validateProviderPath = (path) => validateRepositoryPath(path);
 
 /** @param {string} repoRoot @param {string} path */
 const readFileStat = async (repoRoot, path) => {
@@ -883,5 +886,6 @@ module.exports = {
   readIndexImageFile,
   readWorkingTreeImageFile,
   summarizeContent,
+  validateProviderPath,
   validateRepositoryPath,
 };

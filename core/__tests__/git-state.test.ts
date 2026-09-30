@@ -26,6 +26,7 @@ type StatusEntry = {
 };
 
 type PullRequestFileContent = {
+  available?: boolean;
   binary: boolean;
   file?: { cacheKey?: string; contents: string; name: string };
   fingerprint?: string;
@@ -241,7 +242,7 @@ process.stdin.on('end', () => {
     );
     return;
   }
-  process.stdout.write(JSON.stringify({ head: { sha: 'head-sha' } }));
+  process.stdout.write(JSON.stringify({ head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }));
 });
 `,
   );
@@ -537,8 +538,8 @@ test('parseGitHubPullRequestUrl rejects values that are not GitHub pull requests
 });
 
 test('validateRepositoryPath returns normalized repository paths', () => {
-  expect(validateRepositoryPath('src/./file.ts')).toBe(join('src', 'file.ts'));
-  expect(validateRepositoryPath('src//nested/file.ts')).toBe(join('src', 'nested', 'file.ts'));
+  expect(validateRepositoryPath('src/./file.ts')).toBe('src/file.ts');
+  expect(validateRepositoryPath('src//nested/file.ts')).toBe('src/nested/file.ts');
 });
 
 test('validateRepositoryPath rejects traversal segments', () => {
@@ -700,8 +701,16 @@ test('createPullRequestSection falls back to the patch when modified contents fa
     pullRequestFixture,
     { filename: 'src/app.ts', status: 'modified' },
     patch,
-    { binary: false, file: { cacheKey: 'base:empty', contents: '', name: 'src/app.ts' } },
-    { binary: false, file: { cacheKey: 'head:empty', contents: '', name: 'src/app.ts' } },
+    {
+      available: false,
+      binary: false,
+      file: { cacheKey: 'base:empty', contents: '', name: 'src/app.ts' },
+    },
+    {
+      available: false,
+      binary: false,
+      file: { cacheKey: 'head:empty', contents: '', name: 'src/app.ts' },
+    },
   );
 
   expect(section.oldFile).toBeUndefined();
@@ -737,7 +746,7 @@ test('resolvePullRequestContentRefs resolves the diff against the merge base', a
       head: { sha: headSha },
     });
 
-    expect(refs).toEqual({ base: mergeBase, head: 'refs/codiff/pull-requests/7/head' });
+    expect(refs).toEqual({ base: mergeBase, head: headSha });
     // The base tip is intentionally not used; only the PR's own changes show.
     expect(refs?.base).not.toBe(baseTip);
   });

@@ -162,8 +162,10 @@ const readObjectContents = async (repoRoot, objects) => {
 /**
  * @param {number} size
  * @param {number} limit
+ * @returns {import('./common.cjs').FileContentResult}
  */
 const createLargeBlobResult = (size, limit) => ({
+  available: true,
   binary: false,
   loadState: size > MANUAL_TEXT_FILE_LIMIT ? 'too-large' : 'deferred',
   summary: createSummary(
@@ -184,6 +186,7 @@ const createLargeBlobResult = (size, limit) => ({
  * @param {boolean} refScoped
  */
 const createEmptyFileContent = (path, ref, refScoped = false) => ({
+  available: false,
   binary: false,
   file: {
     cacheKey: refScoped ? `${ref}:${path}:empty` : `empty:${path}`,
@@ -217,7 +220,7 @@ const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
           }
         : null,
     )
-    .filter(Boolean);
+    .filter((object) => object !== null);
   const contents = await readObjectContents(repoRoot, readableObjects);
   /** @type {Map<string, import('./common.cjs').FileContentResult>} */
   const files = new Map();
@@ -244,7 +247,7 @@ const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
     files.set(
       path,
       buffer
-        ? bufferToTextFile(path, buffer, `${ref}:${path}`)
+        ? { available: true, ...bufferToTextFile(path, buffer, `${ref}:${path}`) }
         : createEmptyFileContent(path, ref, options.refScopedEmptyCacheKey),
     );
   }

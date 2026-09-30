@@ -31,6 +31,7 @@ const {
   normalizePullRequestComment,
   parseGitHubPullRequestUrl,
   readPullRequestImageContent,
+  readPullRequestSectionContent,
   readPullRequestState,
   resolvePullRequestContentRefs,
   selectUnresolvedReviewComments,
@@ -44,6 +45,7 @@ const {
   normalizeGitLabReviewComment,
   parseGitLabMergeRequestUrl,
   readMergeRequestImageContent,
+  readMergeRequestSectionContent,
   readMergeRequestState,
   submitMergeRequestComment,
   submitMergeRequestReview,
@@ -178,27 +180,40 @@ const readRepositoryHistory = (launchPath, limit, source) =>
       );
 
 /** @param {string} launchPath @param {DiffSectionContentRequest} request */
-const readDiffSectionContent = async (launchPath, request) =>
-  request.source?.type === 'range'
-    ? readRangeSectionContent(
-        launchPath,
-        request.source.base,
-        request.source.head,
-        request.source.symmetric,
-        request.path,
-        { force: request.force },
-      )
-    : request.source?.type === 'branch' || request.source?.type === 'branch-diff'
-      ? readBranchSectionContent(launchPath, request.source, request.path, {
-          force: request.force,
-        })
-      : request.source?.type === 'branch-working-tree'
-        ? readBranchWorkingTreeSectionContent(launchPath, request)
-        : request.kind === 'commit' || request.source?.type === 'commit'
-          ? readCommitSectionContent(launchPath, request.source?.ref || 'HEAD', request.path, {
-              force: request.force,
-            })
-          : readWorkingTreeDiffSectionContent(launchPath, request);
+const readDiffSectionContent = async (launchPath, request) => {
+  if (request.source?.type === 'pull-request') {
+    const read = isGitLabReviewSource(request.source)
+      ? readMergeRequestSectionContent
+      : readPullRequestSectionContent;
+    return read(launchPath, request.source, request.path, {
+      force: request.force,
+    });
+  }
+  if (request.source?.type === 'range') {
+    return readRangeSectionContent(
+      launchPath,
+      request.source.base,
+      request.source.head,
+      request.source.symmetric,
+      request.path,
+      { force: request.force },
+    );
+  }
+  if (request.source?.type === 'branch' || request.source?.type === 'branch-diff') {
+    return readBranchSectionContent(launchPath, request.source, request.path, {
+      force: request.force,
+    });
+  }
+  if (request.source?.type === 'branch-working-tree') {
+    return readBranchWorkingTreeSectionContent(launchPath, request);
+  }
+  if (request.kind === 'commit' || request.source?.type === 'commit') {
+    return readCommitSectionContent(launchPath, request.source?.ref || 'HEAD', request.path, {
+      force: request.force,
+    });
+  }
+  return readWorkingTreeDiffSectionContent(launchPath, request);
+};
 
 /** @param {string} launchPath @param {DiffImageContentRequest} request @returns {Promise<DiffImageContentResult>} */
 const readDiffImageContent = (launchPath, request) =>
@@ -247,6 +262,8 @@ module.exports = {
   readRepositoryChangeSignature,
   readCommitState,
   readPullRequestState,
+  readPullRequestSectionContent,
+  readMergeRequestSectionContent,
   readRepositoryState,
   readWalkthroughRepositoryState,
   readWorkingTreeState,
