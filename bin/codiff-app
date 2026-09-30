@@ -285,6 +285,9 @@ expect_pi_session=0
 expect_agent=0
 expect_branch_ref=0
 expect_commit_ref=0
+branch_ref_provided=0
+commit_ref_provided=0
+review_positional_count=0
 expect_pull_request_value=0
 expect_walkthrough_context=0
 expect_walkthrough_file=0
@@ -341,6 +344,16 @@ is_git_repository() {
   git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1
 }
 
+validate_revision_value() {
+  case "$2" in
+    -*) printf '%s\n' "codiff: $1 requires a nonempty revision." >&2; exit 1 ;;
+  esac
+  if ! printf '%s' "$2" | grep -q '[^[:space:]]'; then
+    printf '%s\n' "codiff: $1 requires a nonempty revision." >&2
+    exit 1
+  fi
+}
+
 for arg in "$@"; do
   if [ "$expect_codex_session" -eq 1 ]; then
     codex_session_id="$arg"
@@ -373,12 +386,14 @@ for arg in "$@"; do
   fi
 
   if [ "$expect_branch_ref" -eq 1 ]; then
+    validate_revision_value --branch "$arg"
     branch_ref="$arg"
     expect_branch_ref=0
     continue
   fi
 
   if [ "$expect_commit_ref" -eq 1 ]; then
+    validate_revision_value --commit "$arg"
     commit_ref="$arg"
     expect_commit_ref=0
     continue
@@ -421,11 +436,17 @@ for arg in "$@"; do
       continue
     fi
     if [ "$pull_request_provider" = "pr" ]; then
+      validate_revision_value 'provider review source' "$arg"
+      if is_explicit_path_arg "$arg"; then
+        printf '%s\n' 'codiff: provider review source requires a number, URL, or branch.' >&2
+        exit 1
+      fi
       pull_request_branch="$arg"
       expect_pull_request_value=0
       continue
     fi
-    expect_pull_request_value=0
+    printf '%s\n' 'codiff: provider review source requires a number or URL.' >&2
+    exit 1
   fi
 
   case "$arg" in
@@ -488,16 +509,22 @@ for arg in "$@"; do
       agent_backend="${arg#--agent=}"
       ;;
     --branch)
+      branch_ref_provided=$((branch_ref_provided + 1))
       expect_branch_ref=1
       ;;
     --branch=*)
+      branch_ref_provided=$((branch_ref_provided + 1))
       branch_ref="${arg#--branch=}"
+      validate_revision_value --branch "$branch_ref"
       ;;
     --commit)
+      commit_ref_provided=$((commit_ref_provided + 1))
       expect_commit_ref=1
       ;;
     --commit=*)
+      commit_ref_provided=$((commit_ref_provided + 1))
       commit_ref="${arg#--commit=}"
+      validate_revision_value --commit "$commit_ref"
       ;;
     --walkthrough-context)
       expect_walkthrough_context=1
@@ -542,14 +569,65 @@ for arg in "$@"; do
         pull_request_source="$arg"
       elif [ -z "$pull_request_source" ] && is_review_url_arg "$arg"; then
         pull_request_source="$arg"
-      elif [ -z "$commit_ref" ] && [ -z "$branch_ref" ] && [ -z "$source_ref" ] && ! is_explicit_path_arg "$arg"; then
-        source_ref="$arg"
-      elif [ -z "$repository_path" ]; then
-        repository_path="$arg"
+      else
+        review_positional_count=$((review_positional_count + 1))
+        if [ "$review_positional_count" -gt 2 ]; then
+          printf '%s\n' 'codiff: choose only one review source and repository path.' >&2
+          exit 1
+        fi
+        if ! printf '%s' "$arg" | grep -q '[^[:space:]]'; then
+          printf '%s\n' 'codiff: review source and repository path must be nonempty.' >&2
+          exit 1
+        fi
+        if is_explicit_path_arg "$arg"; then
+          if [ -n "$repository_path" ]; then
+            printf '%s\n' 'codiff: choose only one review source and repository path.' >&2
+            exit 1
+          fi
+          repository_path="$arg"
+        elif [ -z "$source_ref" ]; then
+          source_ref="$arg"
+        elif [ -z "$repository_path" ]; then
+          repository_path="$arg"
+        fi
       fi
       ;;
   esac
 done
+
+if [ "$expect_pull_request_value" -eq 1 ]; then
+  printf '%s\n' 'codiff: provider review source requires a valid target.' >&2
+  exit 1
+fi
+if [ "$commit_ref_provided" -gt 0 ] && { [ -z "$commit_ref" ] || [ "$expect_commit_ref" -eq 1 ]; }; then
+  printf '%s\n' 'codiff: --commit requires a nonempty revision.' >&2
+  exit 1
+fi
+if [ "$branch_ref_provided" -gt 0 ] && { [ -z "$branch_ref" ] || [ "$expect_branch_ref" -eq 1 ]; }; then
+  printf '%s\n' 'codiff: --branch requires a nonempty revision.' >&2
+  exit 1
+fi
+selector_count=$((commit_ref_provided + branch_ref_provided))
+repository_context="${repository_path:-$PWD}"
+if [ -n "$repository_path" ] && ! is_explicit_path_arg "$repository_path" &&
+  { [ "${repository_path#*..}" != "$repository_path" ] || is_git_commit_ref "$PWD" "$repository_path"; }; then
+  selector_count=$((selector_count + 1))
+fi
+if [ -n "$pull_request_source" ] || [ -n "$pull_request_branch" ]; then
+  selector_count=$((selector_count + 1))
+fi
+if [ -n "$source_ref" ] && [ -z "$plan_file_path" ]; then
+  if [ -e "$source_ref" ] && [ -z "$repository_path" ] && ! is_git_commit_ref "$repository_context" "$source_ref"; then
+    repository_path="$source_ref"
+    source_ref=""
+  else
+    selector_count=$((selector_count + 1))
+  fi
+fi
+if [ "$selector_count" -gt 1 ]; then
+  printf '%s\n' 'codiff: choose only one review source: commit, branch, range, or provider.' >&2
+  exit 1
+fi
 
 if [ -n "$plan_file_path" ] && [ -n "$source_ref" ] && [ -z "$repository_path" ]; then
   repository_path="$source_ref"
@@ -563,7 +641,7 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
     *) repository_context="$PWD/$repository_context" ;;
   esac
 
-  if is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
+  if { is_commit_ref_arg "$source_ref" || [ "${source_ref#*..}" != "$source_ref" ]; } && is_git_commit_ref "$repository_context" "$source_ref"; then
     commit_ref="$source_ref"
   elif [ "${source_ref#*..}" != "$source_ref" ]; then
     range_base="${source_ref%%..*}"

@@ -15,9 +15,14 @@ const {
   git,
   gitOrEmpty,
   summarizeContent,
-  validateRepositoryPath,
+  validateProviderPath,
 } = require('./common.cjs');
 const { readGitFiles } = require('./git-files.cjs');
+const {
+  assertProviderSnapshot,
+  githubFilesSchema,
+  githubMetadataSchema,
+} = require('./provider-validation.cjs');
 const { parseReviewUrl } = require('../review-source.cjs');
 
 /**
@@ -340,20 +345,24 @@ const ghApiBuffer = async (repoRoot, args) => {
 
 /** @param {string} repoRoot @param {PullRequestReference} pullRequest @returns {Promise<GitHubPullRequestMetadata>} */
 const readPullRequestMetadata = async (repoRoot, pullRequest) =>
-  JSON.parse(
-    await ghApi(repoRoot, [
-      `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}`,
-    ]),
+  githubMetadataSchema.parse(
+    JSON.parse(
+      await ghApi(repoRoot, [
+        `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}`,
+      ]),
+    ),
   );
 
 /** @param {string} repoRoot @param {PullRequestReference} pullRequest @returns {Promise<Array<GitHubPullRequestFile>>} */
 const readPullRequestFiles = async (repoRoot, pullRequest) => {
-  const pages = JSON.parse(
-    await ghApi(repoRoot, [
-      '--paginate',
-      '--slurp',
-      `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}/files?per_page=100`,
-    ]),
+  const pages = githubFilesSchema.parse(
+    JSON.parse(
+      await ghApi(repoRoot, [
+        '--paginate',
+        '--slurp',
+        `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}/files?per_page=100`,
+      ]),
+    ),
   );
   return pages.flat();
 };
@@ -656,7 +665,9 @@ const splitPullRequestDiff = (diff) => {
     const newPath = chunk.match(/^\+\+\+\s+b\/(.+)$/m)?.[1];
     const oldPath = chunk.match(/^---\s+a\/(.+)$/m)?.[1];
     const renamePath = chunk.match(/^rename to (.+)$/m)?.[1];
-    const path = newPath && newPath !== '/dev/null' ? newPath : renamePath || oldPath;
+    const metadataPath = chunk.match(/^diff --git a\/(.+) b\/\1$/m)?.[1];
+    const path =
+      newPath && newPath !== '/dev/null' ? newPath : renamePath || oldPath || metadataPath;
     if (path) {
       map.set(path, `${chunk}\n`);
     }
@@ -694,7 +705,7 @@ const normalizePullRequestFileStatus = (status) =>
         ? 'renamed'
         : 'modified';
 
-/** @param {PullRequestReference} pullRequest @param {GitHubPullRequestMetadata} metadata @returns {Extract<ReviewSource, {type: 'pull-request'}>} */
+/** @param {PullRequestReference} pullRequest @param {GitHubPullRequestMetadata} metadata @returns {Extract<ReviewSource, {type: 'pull-request'}> & {baseSha?: string}} */
 const createPullRequestSource = (pullRequest, metadata) => ({
   ...(metadata.user?.login
     ? {
@@ -707,6 +718,7 @@ const createPullRequestSource = (pullRequest, metadata) => ({
     : {}),
   ...(metadata.body?.trim() ? { description: metadata.body.trim() } : {}),
   headSha: metadata.head?.sha,
+  baseSha: metadata.base?.sha,
   host: 'github.com',
   number: pullRequest.number,
   owner: pullRequest.owner,
@@ -743,11 +755,11 @@ const resolvePullRequestContentRefs = async (repoRoot, pullRequest, metadata, se
   const baseRef = `refs/codiff/pull-requests/${pullRequest.number}/base`;
   const headSha = metadata.head?.sha;
   const baseSha = metadata.base?.sha;
-  const localHead = (
-    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', headRef])
+  let localHead = (
+    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${headRef}^{commit}`])
   ).trim();
-  const localBase = (
-    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', baseRef])
+  let localBase = (
+    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`])
   ).trim();
 
   // Refetch when a ref is missing or has moved -- including when the base branch
@@ -765,13 +777,27 @@ const resolvePullRequestContentRefs = async (repoRoot, pullRequest, metadata, se
         selectedRemote ??
         (await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha));
       await fetchPullRequestHistoryRefs(repoRoot, remote, pullRequest, metadata);
+      const updatedRefs = await Promise.all([
+        gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${headRef}^{commit}`]),
+        gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`]),
+      ]);
+      localHead = updatedRefs[0].trim();
+      localBase = updatedRefs[1].trim();
     } catch {
       return null;
     }
   }
 
-  const mergeBase = (await gitOrEmpty(repoRoot, ['merge-base', baseRef, headRef])).trim();
-  return mergeBase ? { base: mergeBase, head: headRef } : null;
+  if (
+    !localHead ||
+    !localBase ||
+    (headSha && headSha !== localHead) ||
+    (baseSha && baseSha !== localBase)
+  ) {
+    return null;
+  }
+  const mergeBase = (await gitOrEmpty(repoRoot, ['merge-base', localBase, localHead])).trim();
+  return mergeBase ? { base: mergeBase, head: localHead } : null;
 };
 
 /**
@@ -788,7 +814,7 @@ const BINARY_DIFF_MARKER = /^Binary files .* differ/m;
  * renders a recomputed diff with expandable unmodified context (matching commits
  * and the working tree). Otherwise it falls back to the GitHub patch.
  *
- * @param {PullRequestReference} pullRequest
+ * @param {{number: number}} pullRequest
  * @param {GitHubPullRequestFile} file
  * @param {string} patch
  * @param {import('./common.cjs').FileContentResult} [oldFile]
@@ -797,27 +823,24 @@ const BINARY_DIFF_MARKER = /^Binary files .* differ/m;
  */
 const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) => {
   const id = `${file.filename}:pull-request:${pullRequest.number}`;
-  const patchBinary = !patch || BINARY_DIFF_MARKER.test(patch);
+  const patchBinary = BINARY_DIFF_MARKER.test(patch);
   // Expandable context can only be rendered when both sides' contents are present.
   const attemptedContent = oldFile != null && newFile != null;
 
-  if (attemptedContent && !BINARY_DIFF_MARKER.test(patch)) {
+  const requiredContentsAvailable =
+    attemptedContent &&
+    (file.status === 'added' || oldFile.available !== false) &&
+    (file.status === 'removed' || newFile.available !== false);
+
+  if (requiredContentsAvailable && !patchBinary) {
     const summary =
       newFile.loadState === 'too-large'
         ? summarizeContent(newFile, oldFile)
         : summarizeContent(oldFile, newFile);
-    if (summary.loadState !== 'ready') {
+    if (summary.binary || (!patch && summary.loadState !== 'ready')) {
       return { ...summary, id, kind: 'pull-request', patch };
     }
-    const status = normalizePullRequestFileStatus(file.status);
-    const oldContents = oldFile.file?.contents ?? '';
-    const newContents = newFile.file?.contents ?? '';
-    // A modification that reads empty on both sides means the content failed to
-    // load; keep the patch instead of rendering it as an empty (no-op) diff.
-    const contentMissing =
-      (status === 'modified' || status === 'renamed') && oldContents === '' && newContents === '';
-
-    if (!summary.binary && summary.loadState === 'ready' && !contentMissing) {
+    if (summary.loadState === 'ready' && oldFile.file && newFile.file) {
       return {
         binary: false,
         id,
@@ -834,40 +857,29 @@ const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) =>
     binary: patchBinary,
     id,
     kind: 'pull-request',
-    loadState: patchBinary ? 'binary' : 'ready',
+    loadState: patchBinary ? 'binary' : patch ? 'ready' : 'error',
     patch,
     summary: createSummary(
-      patchBinary ? 'Binary file changed.' : 'Showing the pull request patch for this file.',
+      patchBinary
+        ? 'Binary file changed.'
+        : patch
+          ? 'Showing the pull request patch for this file.'
+          : 'Codiff could not load full contents for this review file.',
       { canLoad: false },
     ),
   };
 };
 
-/**
- * @param {string} launchPath
- * @param {Extract<ReviewSource, {type: 'pull-request'}>} source
- * @param {string} requestedPath
- * @param {{force?: boolean}} [options]
- * @returns {Promise<import('../../core/types.ts').DiffSection>}
- */
-const readPullRequestSectionContent = async (launchPath, source, requestedPath, options = {}) => {
-  const path = validateRepositoryPath(requestedPath);
-  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-  const pullRequest = parseGitHubPullRequestUrl(source.url);
-  const [metadata, files, diff] = await Promise.all([
-    readPullRequestMetadata(repoRoot, pullRequest),
-    readPullRequestFiles(repoRoot, pullRequest),
-    readPullRequestDiff(repoRoot, pullRequest),
-  ]);
-  const file = files.find((candidate) => candidate.filename === path);
-  if (!file) {
-    throw new Error('File is not part of this pull request.');
-  }
-  const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
-  const refs = await resolvePullRequestContentRefs(repoRoot, pullRequest, metadata, remote);
-  if (!refs) {
-    throw new Error('Codiff could not resolve full contents for this pull request.');
-  }
+/** @param {string} repoRoot @param {{number: number}} reference @param {GitHubPullRequestFile} file @param {string} patch @param {{base: string; head: string}} refs @param {{force?: boolean}} options @param {string} provider */
+const readProviderSectionContent = async (
+  repoRoot,
+  reference,
+  file,
+  patch,
+  refs,
+  options,
+  provider,
+) => {
   const oldPath = file.previous_filename || file.filename;
   const [oldFiles, newFiles] = await Promise.all([
     readGitFiles(repoRoot, refs.base, [oldPath], { ...options, refScopedEmptyCacheKey: true }),
@@ -879,17 +891,60 @@ const readPullRequestSectionContent = async (launchPath, source, requestedPath, 
   const oldFile = oldFiles.get(oldPath);
   const newFile = newFiles.get(file.filename);
   if (
-    (file.status !== 'added' && oldFile?.file?.cacheKey === `${refs.base}:${oldPath}:empty`) ||
-    (file.status !== 'removed' && newFile?.file?.cacheKey === `${refs.head}:${file.filename}:empty`)
+    (file.status !== 'added' && oldFile?.available !== true) ||
+    (file.status !== 'removed' && newFile?.available !== true)
   ) {
-    throw new Error('Codiff could not load full contents for this pull request file.');
+    throw new Error(`Codiff could not load full contents for this ${provider} file.`);
+  }
+  return createPullRequestSection(reference, file, patch, oldFile, newFile);
+};
+
+/**
+ * @param {string} launchPath
+ * @param {Extract<ReviewSource, {type: 'pull-request'}>} source
+ * @param {string} requestedPath
+ * @param {{force?: boolean}} [options]
+ * @returns {Promise<import('../../core/types.ts').DiffSection>}
+ */
+const readPullRequestSectionContent = async (launchPath, source, requestedPath, options = {}) => {
+  const path = validateProviderPath(requestedPath);
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  const pullRequest = parseGitHubPullRequestUrl(source.url);
+  const [metadata, files, diff] = await Promise.all([
+    readPullRequestMetadata(repoRoot, pullRequest),
+    readPullRequestFiles(repoRoot, pullRequest),
+    readPullRequestDiff(repoRoot, pullRequest),
+  ]);
+  const snapshot = { baseSha: metadata.base?.sha, headSha: metadata.head?.sha };
+  assertProviderSnapshot(source, snapshot, 'GitHub');
+  const file = files.find((candidate) => candidate.filename === path);
+  if (!file) {
+    throw new Error('File is not part of this pull request.');
+  }
+  const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
+  const refs = await resolvePullRequestContentRefs(repoRoot, pullRequest, metadata, remote);
+  if (!refs) {
+    throw new Error(
+      'Codiff could not resolve full contents for this pull request. Refresh the review and try again.',
+    );
   }
   const patch =
     splitPullRequestDiff(diff).get(file.filename) || createPatchFromPullRequestFile(file);
-  const section = createPullRequestSection(pullRequest, file, patch, oldFile, newFile);
-  if (!section.binary && section.loadState === 'ready' && !section.oldFile && !section.newFile) {
-    throw new Error('Codiff could not load full contents for this pull request file.');
-  }
+  const section = await readProviderSectionContent(
+    repoRoot,
+    pullRequest,
+    file,
+    patch,
+    refs,
+    options,
+    'pull request',
+  );
+  const current = await readPullRequestMetadata(repoRoot, pullRequest);
+  assertProviderSnapshot(
+    snapshot,
+    { baseSha: current.base?.sha, headSha: current.head?.sha },
+    'GitHub',
+  );
   return section;
 };
 
@@ -908,8 +963,7 @@ const readPullRequestState = async (launchPath, source) => {
   const diffByPath = splitPullRequestDiff(diff);
   // Load every file's base and head contents up front from the local refs, so
   // each diff renders in its final collapsed layout immediately and never shifts
-  // as expandable context becomes available. Files larger than the eager limit
-  // retain their native deferred or too-large summaries.
+  // as expandable context becomes available.
   const contentRefs = await resolvePullRequestContentRefs(
     repoRoot,
     pullRequest,
@@ -990,13 +1044,18 @@ const readPullRequestState = async (launchPath, source) => {
 const readPullRequestImageContent = async (launchPath, source, requestedPath) => {
   try {
     const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-    const path = validateRepositoryPath(requestedPath);
+    const path = validateProviderPath(requestedPath);
     const pullRequest = parseGitHubPullRequestUrl(source.url);
 
     const [metadata, files] = await Promise.all([
       readPullRequestMetadata(repoRoot, pullRequest),
       readPullRequestFiles(repoRoot, pullRequest),
     ]);
+    assertProviderSnapshot(
+      source,
+      { baseSha: metadata.base?.sha, headSha: metadata.head?.sha },
+      'GitHub',
+    );
     await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
     const file = files.find((candidate) => candidate.filename === path);
     if (!file) {
@@ -1173,6 +1232,7 @@ module.exports = {
   parseGitHubPullRequestUrl,
   readPullRequestImageContent,
   readPullRequestSectionContent,
+  readProviderSectionContent,
   readPullRequestState,
   resolvePullRequestContentRefs,
   selectPullRequestRemote,

@@ -562,6 +562,7 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
 });
 
 test.each([
+  ':/feature..message|fallback',
   'HEAD^{/..}',
   'HEAD^{/.. }',
   'HEAD^{/.*.. .*}',
@@ -581,7 +582,7 @@ test.each([
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
     await writeFile(join(repositoryPath, 'feature.txt'), 'feature\n');
     await git(repositoryPath, ['add', '.']);
-    await git(repositoryPath, ['commit', '-m', 'feature-only change']);
+    await git(repositoryPath, ['commit', '-m', 'feature..message change']);
     await writeFile(join(repositoryPath, 'local.txt'), 'must not substitute local changes\n');
     const require = createRequire(import.meta.url);
     const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
@@ -622,6 +623,80 @@ test.each([
     }
   },
 );
+
+test.each([
+  { selectors: ['--commit', 'HEAD', '--branch', 'base'] },
+  { selectors: ['base..target', 'https://github.com/owner/repo/pull/42'] },
+  { selectors: ['--commit'] },
+  { selectors: ['--branch'] },
+  { selectors: ['--commit='] },
+  { selectors: ['--branch='] },
+  { selectors: ['--commit', 'HEAD', '<repo>', 'base..target'] },
+  { selectors: ['base..target', '--commit', 'HEAD', '<repo>'] },
+  { selectors: ['--branch', 'base', '<repo>', 'base...target'] },
+  { selectors: ['base...target', '--branch', 'base', '<repo>'] },
+  { selectors: ['base..target', '<repo>', 'base...target'] },
+  { selectors: ['--commit', 'HEAD', '<repo>', 'HEAD~1'] },
+  { selectors: ['--branch', 'base', '<repo>', 'target'] },
+  { selectors: ['--commit', '   '] },
+  { selectors: ['--branch= \t'] },
+  { selectors: ['--commit', '--branch', 'base'] },
+  { selectors: ['--branch', '--commit', 'HEAD'] },
+  { selectors: ['--commit=--branch'] },
+  { selectors: ['--commit=HEAD', '--commit=HEAD~1'] },
+  { selectors: ['--branch=base', '--branch=target'] },
+  { selectors: ['--commit=', '--commit=HEAD'] },
+  { selectors: ['--branch=   ', '--branch=base'] },
+  { selectors: ['mr'] },
+  { selectors: ['mr', ''] },
+  { selectors: ['mr', 'base'] },
+  { selectors: ['mr', '--commit', 'HEAD'] },
+  { selectors: ['mr', '--branch', 'base'] },
+])(
+  'invalid review selectors %j fail before launching another comparison',
+  async ({ selectors }) => {
+    const require = createRequire(import.meta.url);
+    const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+    const args = selectors.map((selector) =>
+      selector === '<repo>' ? refRepositoryPath : selector,
+    );
+    const missingRevision =
+      selectors.length === 1 && ['--commit', '--branch'].includes(selectors[0] ?? '');
+    if (!selectors.includes('<repo>') && !missingRevision) {
+      args.push(refRepositoryPath);
+    }
+    expect(() => parseArguments(args)).toThrow(/revision|review source/);
+    expect(() => getCommandLineLaunchOptions(['Codiff', ...args])).toThrow(
+      /revision|review source/,
+    );
+    await using logger = await createFakeOpenLogger();
+    await logger.reset();
+    await expect(
+      execFileAsync(resolve('bin/codiff-app'), args, { env: logger.env }),
+    ).rejects.toThrow(/revision|review source/);
+    expect(await logger.readArgs()).toEqual(['']);
+  },
+);
+
+test('a branch matching a local directory still conflicts with a provider source', async () => {
+  await using logger = await createFakeOpenLogger();
+  await logger.reset();
+  await mkdir(join(logger.directory, 'base'));
+  const args = ['base', 'https://github.com/owner/repo/pull/42', refRepositoryPath];
+  const require = createRequire(import.meta.url);
+  const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+  await withCwd(logger.directory, async () => {
+    expect(() => parseArguments(args)).toThrow(/review source/);
+    expect(() => getCommandLineLaunchOptions(['Codiff', ...args])).toThrow(/review source/);
+    await expect(
+      execFileAsync(resolve(import.meta.dirname, '../../bin/codiff-app'), args, {
+        cwd: logger.directory,
+        env: logger.env,
+      }),
+    ).rejects.toThrow(/review source/);
+  });
+  expect(await logger.readArgs()).toEqual(['']);
+});
 
 test('Git-invalid dotted-left composite rejects without substituting local content', async () => {
   await using logger = await createFakeOpenLogger();

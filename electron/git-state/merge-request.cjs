@@ -11,14 +11,20 @@ const {
   git,
   gitOrEmpty,
   readGitImageFile,
-  validateRepositoryPath,
+  validateProviderPath,
 } = require('./common.cjs');
 const { readGitFiles } = require('./git-files.cjs');
 const {
   createPatchFromPullRequestFile,
   createPullRequestSection,
   normalizeGitHubCommit,
+  readProviderSectionContent,
 } = require('./pull-request.cjs');
+const {
+  assertProviderSnapshot,
+  gitlabDiffsSchema,
+  gitlabMetadataSchema,
+} = require('./provider-validation.cjs');
 const { parseReviewUrl, readReviewRemotes } = require('../review-source.cjs');
 
 /**
@@ -229,15 +235,19 @@ const selectMergeRequestRemote = (repoRoot, mergeRequest) => {
 
 /** @param {string} repoRoot @param {ReturnType<typeof parseGitLabMergeRequestUrl>} mergeRequest */
 const readMergeRequestMetadata = async (repoRoot, mergeRequest) =>
-  JSON.parse(await glabApi(repoRoot, mergeRequest, [mergeRequestEndpoint(mergeRequest)]));
+  gitlabMetadataSchema.parse(
+    JSON.parse(await glabApi(repoRoot, mergeRequest, [mergeRequestEndpoint(mergeRequest)])),
+  );
 
 /** @param {string} repoRoot @param {ReturnType<typeof parseGitLabMergeRequestUrl>} mergeRequest */
 const readMergeRequestDiffs = async (repoRoot, mergeRequest) =>
-  parseGlabJsonPages(
-    await glabApi(repoRoot, mergeRequest, [
-      '--paginate',
-      `${mergeRequestEndpoint(mergeRequest, '/diffs')}?per_page=100`,
-    ]),
+  gitlabDiffsSchema.parse(
+    parseGlabJsonPages(
+      await glabApi(repoRoot, mergeRequest, [
+        '--paginate',
+        `${mergeRequestEndpoint(mergeRequest, '/diffs')}?per_page=100`,
+      ]),
+    ),
   );
 
 /** @param {any} diff */
@@ -332,7 +342,7 @@ const readMergeRequestComments = async (repoRoot, mergeRequest) => {
     .filter(Boolean);
 };
 
-/** @param {ReturnType<typeof parseGitLabMergeRequestUrl>} mergeRequest @param {any} metadata @returns {Extract<ReviewSource, {type: 'pull-request'}>} */
+/** @param {ReturnType<typeof parseGitLabMergeRequestUrl>} mergeRequest @param {any} metadata @returns {Extract<ReviewSource, {type: 'pull-request'}> & {baseSha?: string}} */
 const createMergeRequestSource = (mergeRequest, metadata) => ({
   ...(metadata.author?.username || metadata.author?.name
     ? {
@@ -347,6 +357,7 @@ const createMergeRequestSource = (mergeRequest, metadata) => ({
     ? { description: metadata.description.trim() }
     : {}),
   headSha: metadata.sha,
+  baseSha: metadata.diff_refs?.base_sha,
   host: mergeRequest.host,
   number: mergeRequest.number,
   projectPath: mergeRequest.projectPath,
@@ -379,7 +390,9 @@ const fetchMergeRequestRefs = (repoRoot, remote, mergeRequest, metadata) =>
 const resolveMergeRequestContentRefs = async (repoRoot, mergeRequest, metadata) => {
   const head = `refs/codiff/merge-requests/${mergeRequest.number}/head`;
   const base = `refs/codiff/merge-requests/${mergeRequest.number}/base`;
-  const localHead = (await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', head])).trim();
+  let localHead = (
+    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${head}^{commit}`])
+  ).trim();
   const localBase = (await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', base])).trim();
   if (!localHead || !localBase || (metadata.sha && localHead !== metadata.sha)) {
     await fetchMergeRequestRefs(
@@ -388,16 +401,26 @@ const resolveMergeRequestContentRefs = async (repoRoot, mergeRequest, metadata) 
       mergeRequest,
       metadata,
     );
+    localHead = (
+      await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${head}^{commit}`])
+    ).trim();
+  }
+  if (!localHead || (metadata.sha && localHead !== metadata.sha)) {
+    return null;
   }
   const metadataBase = metadata.diff_refs?.base_sha;
-  if (
-    metadataBase &&
-    (await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${metadataBase}^{commit}`]))
-  ) {
-    return { base: metadataBase, head };
+  if (metadataBase) {
+    const resolvedBase = (
+      await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${metadataBase}^{commit}`])
+    ).trim();
+    return resolvedBase ? { base: resolvedBase, head: localHead } : null;
   }
-  const mergeBase = (await gitOrEmpty(repoRoot, ['merge-base', base, head])).trim();
-  return mergeBase ? { base: mergeBase, head } : null;
+  const resolvedBase = (
+    await gitOrEmpty(repoRoot, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`])
+  ).trim();
+  const mergeBase =
+    resolvedBase && (await gitOrEmpty(repoRoot, ['merge-base', resolvedBase, localHead])).trim();
+  return mergeBase ? { base: mergeBase, head: localHead } : null;
 };
 
 /**
@@ -408,7 +431,7 @@ const resolveMergeRequestContentRefs = async (repoRoot, mergeRequest, metadata) 
  * @returns {Promise<import('../../core/types.ts').DiffSection>}
  */
 const readMergeRequestSectionContent = async (launchPath, source, requestedPath, options = {}) => {
-  const path = validateRepositoryPath(requestedPath);
+  const path = validateProviderPath(requestedPath);
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const mergeRequest = parseGitLabMergeRequestUrl(source.url);
   selectMergeRequestRemote(repoRoot, mergeRequest);
@@ -416,41 +439,34 @@ const readMergeRequestSectionContent = async (launchPath, source, requestedPath,
     readMergeRequestMetadata(repoRoot, mergeRequest),
     readMergeRequestDiffs(repoRoot, mergeRequest),
   ]);
+  const snapshot = { baseSha: metadata.diff_refs?.base_sha, headSha: metadata.sha };
+  assertProviderSnapshot(source, snapshot, 'GitLab');
   const rawDiff = diffs.find((candidate) => candidate.new_path === path);
   if (!rawDiff) {
     throw new Error('File is not part of this merge request.');
   }
   const refs = await resolveMergeRequestContentRefs(repoRoot, mergeRequest, metadata);
   if (!refs) {
-    throw new Error('Codiff could not resolve full contents for this merge request.');
+    throw new Error(
+      'Codiff could not resolve full contents for this merge request. Refresh the review and try again.',
+    );
   }
   const file = normalizeGitLabDiffFile(rawDiff);
-  const oldPath = file.previous_filename || file.filename;
-  const [oldFiles, newFiles] = await Promise.all([
-    readGitFiles(repoRoot, refs.base, [oldPath], { ...options, refScopedEmptyCacheKey: true }),
-    readGitFiles(repoRoot, refs.head, [file.filename], {
-      ...options,
-      refScopedEmptyCacheKey: true,
-    }),
-  ]);
-  const oldFile = oldFiles.get(oldPath);
-  const newFile = newFiles.get(file.filename);
-  if (
-    (file.status !== 'added' && oldFile?.file?.cacheKey === `${refs.base}:${oldPath}:empty`) ||
-    (file.status !== 'removed' && newFile?.file?.cacheKey === `${refs.head}:${file.filename}:empty`)
-  ) {
-    throw new Error('Codiff could not load full contents for this merge request file.');
-  }
-  const section = createPullRequestSection(
+  const section = await readProviderSectionContent(
+    repoRoot,
     mergeRequest,
     file,
     createPatchFromPullRequestFile(file),
-    oldFile,
-    newFile,
+    refs,
+    options,
+    'merge request',
   );
-  if (!section.binary && section.loadState === 'ready' && !section.oldFile && !section.newFile) {
-    throw new Error('Codiff could not load full contents for this merge request file.');
-  }
+  const current = await readMergeRequestMetadata(repoRoot, mergeRequest);
+  assertProviderSnapshot(
+    snapshot,
+    { baseSha: current.diff_refs?.base_sha, headSha: current.sha },
+    'GitLab',
+  );
   return section;
 };
 
@@ -774,9 +790,14 @@ const submitMergeRequestReview = async (launchPath, request) => {
 const readMergeRequestImageContent = async (launchPath, source, requestedPath) => {
   try {
     const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-    const path = validateRepositoryPath(requestedPath);
+    const path = validateProviderPath(requestedPath);
     const mergeRequest = parseGitLabMergeRequestUrl(source.url);
     const metadata = await readMergeRequestMetadata(repoRoot, mergeRequest);
+    assertProviderSnapshot(
+      source,
+      { baseSha: metadata.diff_refs?.base_sha, headSha: metadata.sha },
+      'GitLab',
+    );
     const diffs = await readMergeRequestDiffs(repoRoot, mergeRequest);
     const rawDiff = diffs.find((candidate) => candidate.new_path === path);
     if (!rawDiff) {

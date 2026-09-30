@@ -6,6 +6,11 @@ const { resolve } = require('node:path');
 const { parseArgs } = require('node:util');
 const { readWalkthroughContext } = require('../walkthrough-context.cjs');
 const { parseReviewUrl, resolveReviewUrl } = require('../review-source.cjs');
+const {
+  getReviewPositionals,
+  validateReviewSelectors,
+  validateSourceFlags,
+} = require('../launch-selectors.cjs');
 
 /**
  * @typedef {import('../../core/types.ts').CodiffLaunchOptions} CodiffLaunchOptions
@@ -107,7 +112,7 @@ const resolvePullRequestUrl = (repositoryPath, number, provider) =>
 const parseCommandLineArguments = (commandLine = process.argv) => {
   const args = commandLine.slice(process.defaultApp ? 2 : 1);
   const useEnvironment = commandLine === process.argv;
-  const { positionals, values } = parseArgs({
+  const { positionals, tokens, values } = parseArgs({
     allowPositionals: true,
     args,
     options: {
@@ -153,9 +158,11 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       },
     },
     strict: false,
+    tokens: true,
   });
 
   let commitRef = typeof values.commit === 'string' ? values.commit : null;
+  validateSourceFlags(tokens);
   let branchRef = typeof values.branch === 'string' ? values.branch : null;
   let pullRequestNumber = null;
   let pullRequestProvider = null;
@@ -163,6 +170,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
   let repositoryPath = null;
   let sourceCandidate = null;
   let rangeCandidate = null;
+  const reviewPositionals = [];
   const requestedPlanFilePath =
     (typeof values['plan-file'] === 'string' ? values['plan-file'] : '') ||
     (useEnvironment ? process.env.CODIFF_PLAN_FILE || '' : '');
@@ -177,14 +185,6 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     if (parsedPullRequestUrl) {
       pullRequestUrl = parsedPullRequestUrl;
       continue;
-    }
-
-    if (!rangeCandidate && !commitRef && !branchRef && !sourceCandidate) {
-      const parsedRange = parseRangeArgument(arg);
-      if (parsedRange) {
-        rangeCandidate = arg;
-        continue;
-      }
     }
 
     if (!pullRequestUrl && pullRequestNumber == null) {
@@ -204,21 +204,35 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
         index += 1;
         continue;
       }
+      const nextUrl = markerProvider
+        ? parsePullRequestUrlArgument(positionals[index + 1] ?? '')
+        : null;
+      if (nextUrl) {
+        pullRequestUrl = nextUrl;
+        pullRequestProvider = markerProvider;
+        index += 1;
+        continue;
+      }
+      if (markerProvider) {
+        throw new Error('Provider review source requires a number or URL.');
+      }
     }
 
-    if (
-      !rangeCandidate &&
-      !commitRef &&
-      !branchRef &&
-      !sourceCandidate &&
-      !isExplicitPathArgument(arg)
-    ) {
-      sourceCandidate = arg;
-    } else if (repositoryPath == null) {
-      repositoryPath = arg;
-    }
+    reviewPositionals.push(arg);
   }
 
+  const positionalInputs = requestedPlanFilePath
+    ? { repositoryPath, sourceCandidates: [] }
+    : getReviewPositionals(reviewPositionals);
+  repositoryPath = positionalInputs.repositoryPath ?? null;
+  sourceCandidate = positionalInputs.sourceCandidates[0] ?? null;
+  rangeCandidate = sourceCandidate && parseRangeArgument(sourceCandidate) ? sourceCandidate : null;
+  validateReviewSelectors({
+    branchRef,
+    commitRef,
+    positionalSources: positionalInputs.sourceCandidates,
+    providerSource: pullRequestUrl || pullRequestNumber,
+  });
   const range =
     rangeCandidate && !isCommitRef(resolve(repositoryPath || process.cwd()), rangeCandidate)
       ? parseRangeArgument(rangeCandidate)
