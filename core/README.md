@@ -34,13 +34,8 @@ const contentLoader: ReviewContentLoader = {
 
 ## Sidebar placement
 
-The `ReviewSurface` interface accepts an optional `sidebarPosition` of `left` (the default) or
-`right`. The exported `SidebarPosition` type can be used when the value is selected dynamically:
+Set `sidebarPosition="right"` to place the sidebar on the right; the default is `left`.
 
 ```tsx
-import { ReviewSurface, type SidebarPosition } from '@nkzw/codiff-core/react';
-
-const sidebarPosition: SidebarPosition = 'right';
-
-<ReviewSurface sidebarPosition={sidebarPosition} snapshot={snapshot} />;
+<ReviewSurface sidebarPosition="right" snapshot={snapshot} />
 ```
