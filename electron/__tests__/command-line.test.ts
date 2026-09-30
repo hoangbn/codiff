@@ -538,8 +538,10 @@ test('reads base...head and base..head positionals as a range source', async () 
     type: 'range',
   });
 
-  // A range whose ends don't resolve is not treated as a source.
-  expect(
-    readCommandLine(['codiff', 'nope...nada', directory.path]).launchOptions.source,
-  ).toBeUndefined();
+  expect(readCommandLine(['codiff', 'nope...nada', directory.path]).launchOptions.source).toEqual({
+    base: 'nope',
+    head: 'nada',
+    symmetric: true,
+    type: 'range',
+  });
 });

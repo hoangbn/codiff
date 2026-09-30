@@ -213,14 +213,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     }
   }
 
-  let range = null;
-  if (rangeCandidate) {
-    const rangeRepo = resolve(repositoryPath || process.cwd());
-    range =
-      isCommitRef(rangeRepo, rangeCandidate.base) && isCommitRef(rangeRepo, rangeCandidate.head)
-        ? rangeCandidate
-        : null;
-  }
+  const range = rangeCandidate;
 
   if (!range && !commitRef && !branchRef && sourceCandidate) {
     const source = resolveSourceCandidate(

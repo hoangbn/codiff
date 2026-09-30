@@ -561,6 +561,71 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
   );
 });
 
+test.each(['node', 'electron'])(
+  '%s range entry rejects missing endpoints instead of local content',
+  async (entry) => {
+    await using directory = await createTemporaryDirectory('codiff-missing-range-');
+    await git(directory.path, ['init']);
+    await git(directory.path, ['commit', '--allow-empty', '-m', 'initial']);
+    await writeFile(join(directory.path, 'local.txt'), 'must not substitute local changes\n');
+    const require = createRequire(import.meta.url);
+    const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+    const { readRepositoryState } = require('../../electron/git-state.cjs');
+    for (const range of [
+      { base: 'definitely-missing', head: 'HEAD', symmetric: false },
+      { base: 'HEAD', head: 'definitely-missing', symmetric: true },
+    ]) {
+      const target = `${range.base}${range.symmetric ? '...' : '..'}${range.head}`;
+      const parsed = parseArguments([target, directory.path]);
+      const source =
+        entry === 'node'
+          ? getReviewSource({
+              branchRef: parsed.branchRef ?? null,
+              commitRef: parsed.commitRef,
+              pullRequestProvider: parsed.pullRequestProvider ?? null,
+              pullRequestUrl: parsed.pullRequestUrl,
+              range: parsed.range ?? null,
+            })
+          : getCommandLineLaunchOptions(['Codiff', target, directory.path]).source;
+      await expect(readRepositoryState(directory.path, source)).rejects.toThrow();
+      expect(source).toEqual({ ...range, type: 'range' });
+    }
+  },
+);
+
+test.each(['..', '...'])(
+  'packaged helper preserves %s source when a ref disappears before Electron',
+  async (separator) => {
+    await using logger = await createFakeOpenLogger();
+    const repositoryPath = join(logger.directory, 'repo');
+    await mkdir(repositoryPath);
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
+    await git(repositoryPath, ['branch', 'disappearing']);
+    await writeFile(join(repositoryPath, 'local.txt'), 'must not substitute local changes\n');
+    await execFileAsync(
+      resolve('bin/codiff-app'),
+      [`HEAD${separator}disappearing`, repositoryPath],
+      {
+        env: logger.env,
+      },
+    );
+    await git(repositoryPath, ['branch', '-D', 'disappearing']);
+    const args = ['Codiff', ...(await logger.readArgs()).slice(3)];
+    const require = createRequire(import.meta.url);
+    const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+    const { readRepositoryState } = require('../../electron/git-state.cjs');
+    const { source } = getCommandLineLaunchOptions(args);
+    await expect(readRepositoryState(repositoryPath, source)).rejects.toThrow();
+    expect(source).toEqual({
+      base: 'HEAD',
+      head: 'disappearing',
+      symmetric: separator === '...',
+      type: 'range',
+    });
+  },
+);
+
 test.each(['bin/codiff-app', 'bin/codiff.js'])(
   'desktop executable %s advertises its launch contract without opening',
   async (entry) => {
@@ -1531,7 +1596,10 @@ test('parseArguments reads base...target and base..target as a range', async () 
     expect(parseArguments(['base..target'])).toMatchObject({
       range: { base: 'base', head: 'target', symmetric: false },
     });
-    // Unresolved refs fall back instead of being silently read as a range.
-    expect(parseArguments(['nope...nada']).range).toBeUndefined();
+    expect(parseArguments(['nope...nada']).range).toEqual({
+      base: 'nope',
+      head: 'nada',
+      symmetric: true,
+    });
   });
 });
