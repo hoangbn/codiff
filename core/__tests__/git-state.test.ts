@@ -1454,7 +1454,10 @@ test('branch+ matches staging and committing all changes without changing the re
     await writeRepoFile(repo, 'new.txt', 'untracked\n');
     const refreshedTime = new Date(Date.now() + 5000);
     await utimes(join(repo, 'unchanged.txt'), refreshedTime, refreshedTime);
+    await git(repo, ['config', 'core.splitIndex', 'true']);
+    await git(repo, ['update-index', '--split-index']);
     const index = readFileSync(join(repo, '.git/index'));
+    const gitDirectory = (await readdir(join(repo, '.git'))).sort();
     const refs = await git(repo, ['show-ref']);
     const objects = await git(repo, ['count-objects', '-v']);
 
@@ -1477,6 +1480,7 @@ test('branch+ matches staging and committing all changes without changing the re
       type: 'branch-working-tree',
     });
     expect(readFileSync(join(repo, '.git/index'))).toEqual(index);
+    expect((await readdir(join(repo, '.git'))).sort()).toEqual(gitDirectory);
     expect(await git(repo, ['show-ref'])).toBe(refs);
     expect(await git(repo, ['count-objects', '-v'])).toBe(objects);
     expect(readFileSync(join(repo, 'file.txt'), 'utf8')).toBe('final\n');

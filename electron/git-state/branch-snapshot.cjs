@@ -16,8 +16,6 @@ const { listUntrackedItems } = require('./working-tree.cjs');
  * }} BranchSnapshot
  */
 
-const addArgs = ['-c', 'core.splitIndex=false', 'add'];
-
 /**
  * @template T
  * @param {string} repoRoot
@@ -42,9 +40,11 @@ const withBranchSnapshot = async (repoRoot, run) => {
       ]
         .filter(Boolean)
         .join(delimiter),
-      GIT_CONFIG_COUNT: String(configCount + 1),
+      GIT_CONFIG_COUNT: String(configCount + 2),
       [`GIT_CONFIG_KEY_${configCount}`]: 'lfs.storage',
       [`GIT_CONFIG_VALUE_${configCount}`]: join(directory, 'lfs'),
+      [`GIT_CONFIG_KEY_${configCount + 1}`]: 'core.splitIndex',
+      [`GIT_CONFIG_VALUE_${configCount + 1}`]: 'false',
       GIT_INDEX_FILE: join(directory, 'index'),
       GIT_OBJECT_DIRECTORY: join(directory, 'objects'),
     };
@@ -87,11 +87,11 @@ const withBranchSnapshot = async (repoRoot, run) => {
         ...removedUntracked,
       ]),
     ];
-    await git(repoRoot, [...addArgs, '--update'], { env });
+    await git(repoRoot, ['add', '--update'], { env });
     if (untrackedPaths.length > 0) {
       await gitBufferWithInput(
         repoRoot,
-        [...addArgs, '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
+        ['add', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
         Buffer.from(`${untrackedPaths.map((path) => `:(literal)${path}`).join('\0')}\0`),
         { env },
       );

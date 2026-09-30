@@ -81,12 +81,17 @@ The `<scope>` segment depends on which diff you anchored against:
 
 - `staged` — the staged diff (`git diff --staged`).
 - `unstaged` — the working-tree diff (`git diff`).
+- `combined:<merge-base SHA>` — the cumulative `branch+` / “All changes vs main”
+  diff, including the default branch target (`codiff <branch>`). Use the full
+  40-character SHA from `git merge-base <branch> HEAD`, not `HEAD` or the target
+  branch's tip. Each file has one base-to-current section; ordinary local edits
+  preserve its scope id. For example: `src/app.ts:combined:<merge-base SHA>:h1`.
 - `pull-request:<number>` — a pull request.
-- `<commit SHA>` — every commit-like target: a single commit, a branch comparison, or a
-  ref range. This is always the **full 40-character SHA of the diff's new (head) side**,
+- `<commit SHA>` — historical targets: a single commit, a committed-only branch
+  comparison, or a ref range. This is always the **full 40-character SHA of the diff's new (head) side**,
   resolved with `git rev-parse` — never a ref name or a `branch:`/`range:` prefix:
-  - single commit (`codiff <ref>`): the resolved commit SHA.
-  - branch comparison (`codiff <branch>` — current branch vs `<branch>`): the resolved
+  - single commit (`codiff <commit-ref>`): the resolved commit SHA.
+  - committed-only branch comparison (without local changes): the resolved
     **`HEAD`** SHA, _not_ `<branch>`.
   - ref range (`codiff base..head` or `base...head`): the resolved SHA of `head`.
 
