@@ -21,6 +21,16 @@ import { runUpdateCommand } from './update-command.js';
 import { getUpdateNotice } from './update-notice.js';
 import { waitForWalkthroughResult } from './walkthrough-result.js';
 
+if (process.argv.length === 3 && process.argv[2] === '--capabilities') {
+  process.stdout.write(
+    JSON.stringify({
+      version: 1,
+      sources: ['working-tree', 'commit', 'branch-working-tree', 'range', 'pull-request'],
+    }) + '\n',
+  );
+  process.exit(0);
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 

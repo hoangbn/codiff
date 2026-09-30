@@ -2,11 +2,20 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import gitRevision from '../electron/git-revision.cjs';
+import launchSelectors from '../electron/launch-selectors.cjs';
 import reviewSource from '../electron/review-source.cjs';
 
 const { parseReviewUrl, resolveReviewUrl } = reviewSource;
+const { getCommitRevision } = gitRevision;
+const { getReviewPositionals, validateReviewSelectors, validateSourceFlags } = launchSelectors;
 
 export const flagDefinitions = [
+  {
+    description: 'Print desktop-source-v1 launch capabilities, then exit.',
+    name: 'capabilities',
+    type: 'boolean',
+  },
   {
     argument: '<codex|claude|opencode|pi>',
     description: 'Override the agent backend for this session.',
@@ -216,7 +225,7 @@ const isExplicitPathArgument = (arg) =>
   arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../');
 
 // `base...head` (symmetric / merge-base) or `base..head` (direct) range syntax.
-const rangeArgumentPattern = /^([^.][^\s]*?)(\.\.\.?)([^.][^\s]*)$/;
+const rangeArgumentPattern = /^([^.].*?)(\.\.\.?)([^.].*)$/s;
 const parseRangeArgument = (arg) => {
   if (isExplicitPathArgument(arg)) {
     return null;
@@ -247,7 +256,7 @@ const isBranchRef = (repositoryPath, ref) =>
   gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/remotes/${ref}`]);
 
 const isCommitRef = (repositoryPath, ref) =>
-  gitSucceeds(repositoryPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  gitSucceeds(repositoryPath, ['rev-parse', '--verify', getCommitRevision(ref)]);
 
 const resolveSourceCandidate = (repositoryPath, ref) =>
   isCommitRefArgument(ref) && isCommitRef(repositoryPath, ref)
@@ -318,14 +327,16 @@ export const resolvePullRequestTargetUrl = ({ branch, number, provider, reposito
 };
 
 export const parseArguments = (args) => {
-  const { positionals, values } = parseArgs({
+  const { positionals, tokens, values } = parseArgs({
     allowPositionals: true,
     args,
     options: parseArgsOptions,
     strict: false,
+    tokens: true,
   });
 
   let commitRef = typeof values.commit === 'string' ? values.commit : null;
+  validateSourceFlags(tokens);
   let branchRef = typeof values.branch === 'string' ? values.branch : null;
   const codexSessionId =
     typeof values['codex-session'] === 'string' ? values['codex-session'] : null;
@@ -354,9 +365,11 @@ export const parseArguments = (args) => {
   let pullRequestNumber = null;
   let pullRequestProvider = null;
   let pullRequestUrl = null;
+  let providerSourceCount = 0;
   let requestedPath = null;
   let sourceCandidate = null;
   let rangeCandidate = null;
+  const reviewPositionals = [];
   const walkthroughContextPath =
     typeof values['walkthrough-context'] === 'string' ? values['walkthrough-context'] : null;
   const walkthroughFilePath =
@@ -368,69 +381,75 @@ export const parseArguments = (args) => {
       requestedPath ??= arg;
       continue;
     }
-    const parsedPullRequestUrl = pullRequestUrl ? null : parsePullRequestUrlArgument(arg);
+    const parsedPullRequestUrl = parsePullRequestUrlArgument(arg);
     if (parsedPullRequestUrl) {
+      providerSourceCount += 1;
       pullRequestUrl = parsedPullRequestUrl;
       continue;
     }
 
-    if (!pullRequestUrl && pullRequestNumber == null) {
-      const number = parsePullRequestNumberArgument(arg);
-      if (number != null) {
-        pullRequestNumber = number;
-        continue;
-      }
-
-      const markerProvider = getReviewProviderMarker(arg);
-      const nextValue = markerProvider ? positionals[index + 1] : null;
-      const nextNumber = nextValue ? parsePullRequestNumberValue(nextValue) : null;
-      if (nextNumber != null) {
-        pullRequestNumber = nextNumber;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
-      }
-      const parsedNextValue =
-        markerProvider && nextValue ? parsePullRequestUrlArgument(nextValue) : null;
-      if (parsedNextValue) {
-        pullRequestProvider = markerProvider;
-        pullRequestUrl = parsedNextValue;
-        index += 1;
-        continue;
-      }
-      if (markerProvider === 'github' && nextValue) {
-        pullRequestBranch = nextValue;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
-      }
+    const number = parsePullRequestNumberArgument(arg);
+    if (number != null) {
+      providerSourceCount += 1;
+      pullRequestNumber = number;
+      continue;
     }
 
-    if (!rangeCandidate && !commitRef && !branchRef && !sourceCandidate) {
-      const range = parseRangeArgument(arg);
-      if (range) {
-        rangeCandidate = range;
-        continue;
+    const markerProvider = getReviewProviderMarker(arg);
+    if (markerProvider) {
+      providerSourceCount += 1;
+    }
+    const nextValue = markerProvider ? positionals[index + 1] : null;
+    const nextNumber = nextValue ? parsePullRequestNumberValue(nextValue) : null;
+    if (nextNumber != null) {
+      pullRequestNumber = nextNumber;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    const parsedNextValue =
+      markerProvider && nextValue ? parsePullRequestUrlArgument(nextValue) : null;
+    if (parsedNextValue) {
+      pullRequestProvider = markerProvider;
+      pullRequestUrl = parsedNextValue;
+      index += 1;
+      continue;
+    }
+    if (markerProvider === 'github' && nextValue) {
+      if (isExplicitPathArgument(nextValue) || !nextValue.trim() || nextValue.startsWith('-')) {
+        throw new Error('GitHub review source requires a number, URL, or branch.');
       }
+      pullRequestBranch = nextValue;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    if (markerProvider) {
+      throw new Error('Provider review source requires a valid target.');
     }
 
-    if (!commitRef && !branchRef && !sourceCandidate && !isExplicitPathArgument(arg)) {
-      sourceCandidate = arg;
-    } else if (requestedPath == null) {
-      requestedPath = arg;
-    }
+    reviewPositionals.push(arg);
   }
 
+  const positionalInputs = planFilePath
+    ? { repositoryPath: requestedPath, sourceCandidates: [] }
+    : getReviewPositionals(reviewPositionals);
+  requestedPath = positionalInputs.repositoryPath ?? null;
+  sourceCandidate = positionalInputs.sourceCandidates[0] ?? null;
+  rangeCandidate = sourceCandidate && parseRangeArgument(sourceCandidate) ? sourceCandidate : null;
+  validateReviewSelectors({
+    branchRef,
+    commitRef,
+    positionalSources: positionalInputs.sourceCandidates,
+    providerSourceCount,
+  });
   const repositoryPath = resolve(requestedPath ?? process.cwd());
-  let range = null;
-  if (rangeCandidate) {
-    // Only honor the range when both ends resolve in this repository; otherwise
-    // fall back so a stray `a..b`-shaped argument isn't silently misread.
-    range =
-      isCommitRef(repositoryPath, rangeCandidate.base) &&
-      isCommitRef(repositoryPath, rangeCandidate.head)
-        ? rangeCandidate
-        : null;
+  const range =
+    rangeCandidate && !isCommitRef(repositoryPath, rangeCandidate)
+      ? parseRangeArgument(rangeCandidate)
+      : null;
+  if (rangeCandidate && !range) {
+    commitRef = rangeCandidate;
   }
   if (!range && !commitRef && !branchRef && sourceCandidate) {
     const source = resolveSourceCandidate(repositoryPath, sourceCandidate);

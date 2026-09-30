@@ -90,8 +90,8 @@ process.stdin.on('end', () => {
   appendFileSync(process.env.CODIFF_GLAB_TEST_CALLS, JSON.stringify({ args, input }) + '\\n');
   if (endpoint.endsWith('/diffs?per_page=100')) {
     process.stdout.write(
-      '[{"diff":"@@ -10,2 +12,2 @@\\\\n context\\\\n-old\\\\n+new\\\\n","new_path":"src/new.ts","old_path":"src/old.ts"}]' +
-        '[{"diff":"@@ -1 +1 @@\\\\n-old\\\\n+new\\\\n","new_path":"src/other.ts","old_path":"src/other.ts"}]',
+      '[{"diff":"@@ -10,2 +12,2 @@\\\\n context\\\\n-old\\\\n+new\\\\n","new_path":"src/new.ts","old_path":"src/old.ts","new_file":false,"deleted_file":false,"renamed_file":true}]' +
+        '[{"diff":"@@ -1 +1 @@\\\\n-old\\\\n+new\\\\n","new_path":"src/other.ts","old_path":"src/other.ts","new_file":false,"deleted_file":false,"renamed_file":false}]',
     );
     return;
   }
@@ -106,7 +106,8 @@ process.stdin.on('end', () => {
   }
   if (endpoint.endsWith('/merge_requests/23')) {
     process.stdout.write(JSON.stringify({
-      diff_refs: { base_sha: 'base', head_sha: 'head', start_sha: 'start' },
+      diff_refs: { base_sha: 'a'.repeat(40), head_sha: 'b'.repeat(40), start_sha: 'c'.repeat(40) },
+      sha: 'b'.repeat(40),
     }));
     return;
   }
@@ -456,7 +457,10 @@ if [ "$GITLAB_TOKEN" != 'from-login-shell' ]; then
   echo 'To get started with GitLab CLI, please run:  glab auth login.' >&2
   exit 4
 fi
-printf '%s' '{}'
+case "$*" in
+  *'/diffs?per_page=100'*) printf '%s' '[]' ;;
+  *) printf '%s' '{"sha":"${'b'.repeat(40)}"}' ;;
+esac
 `,
     );
     await Promise.all([chmod(fakeShell, 0o755), chmod(fakeGlab, 0o755)]);
@@ -507,7 +511,10 @@ if [ "$GITLAB_TOKEN" != 'from-process' ]; then
   echo 'Expected the process GITLAB_TOKEN to win, got:' "$GITLAB_TOKEN" >&2
   exit 4
 fi
-printf '%s' '{}'
+case "$*" in
+  *'/diffs?per_page=100'*) printf '%s' '[]' ;;
+  *) printf '%s' '{"sha":"${'b'.repeat(40)}"}' ;;
+esac
 `,
     );
     await Promise.all([chmod(fakeShell, 0o755), chmod(fakeGlab, 0o755)]);

@@ -9,6 +9,7 @@ import { removeGitTestDirectory } from './helpers/git.ts';
 import { createTemporaryEnvironment } from './helpers/resources.ts';
 
 type FileContentResult = {
+  available: boolean;
   binary: boolean;
   file?: {
     cacheKey: string;
@@ -115,6 +116,7 @@ const createGitHistory = async (repository: string) => {
   };
 
   const baseCommands = [
+    `M 100644 :${addBlob('')} empty.txt`,
     `M 100644 :${addBlob('before\n')} modified.txt`,
     `M 100644 :${addBlob('rename before\n')} renamed-old.txt`,
     `M 100644 :${addBlob('deleted\n')} deleted.txt`,
@@ -224,6 +226,19 @@ test('batched Git file reads preserve text, binary, rename, missing, and size be
   expect(newFiles.get('missing.txt')?.file?.cacheKey).toBe(`${head}:missing.txt:empty`);
   expect(oldFiles.get('literal-:(name).txt')?.file?.contents).toBe('literal before\n');
   expect(newFiles.get('literal-:(name).txt')?.file?.contents).toBe('literal after\n');
+});
+
+test('Git blob availability distinguishes empty files from absent and deferred files', async () => {
+  const files = await readGitFiles(repo, head, [
+    'empty.txt',
+    'missing.txt',
+    'medium.txt',
+    'huge.txt',
+  ]);
+  expect(files.get('empty.txt')).toMatchObject({ available: true, file: { contents: '' } });
+  expect(files.get('missing.txt')).toMatchObject({ available: false });
+  expect(files.get('medium.txt')).toMatchObject({ available: true, loadState: 'deferred' });
+  expect(files.get('huge.txt')).toMatchObject({ available: true, loadState: 'too-large' });
 });
 
 test.each(batchCases)(

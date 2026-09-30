@@ -3,6 +3,7 @@
 const { execFileSync } = require('node:child_process');
 const { realpathSync } = require('node:fs');
 const { dirname, resolve } = require('node:path');
+const { getCommitRevision } = require('./git-revision.cjs');
 const { parseReviewUrl } = require('./review-source.cjs');
 
 /**
@@ -39,9 +40,13 @@ const resolveRepositoryRoot = (repositoryPath) => {
 /** @param {string} repositoryRoot @param {string} ref */
 const resolveCommitRef = (repositoryRoot, ref) => {
   try {
-    return execFileSync('git', ['-C', repositoryRoot, 'rev-parse', '--verify', `${ref}^{commit}`], {
-      encoding: 'utf8',
-    })
+    return execFileSync(
+      'git',
+      ['-C', repositoryRoot, 'rev-parse', '--verify', getCommitRevision(ref)],
+      {
+        encoding: 'utf8',
+      },
+    )
       .trim()
       .toLowerCase();
   } catch {
