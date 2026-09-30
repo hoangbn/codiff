@@ -296,6 +296,8 @@ const resolveSearchRevision = async (request, repoPath) => {
     return side === 'additions'
       ? { cached: false, revision: null, untracked: true }
       : { cached: true, revision: null };
+  if (kind === 'combined' && side === 'additions')
+    return { cached: false, revision: null, untracked: true };
 
   let head = null;
   let base = null;

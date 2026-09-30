@@ -1,7 +1,15 @@
 // @ts-check
 
-const { fileSort, getFingerprint, getGravatarHash, git, normalizeStatus } = require('./common.cjs');
 const { getCommitRevision } = require('../git-revision.cjs');
+const {
+  createSection,
+  fileSort,
+  getFingerprint,
+  getGravatarHash,
+  git,
+  normalizeStatus,
+} = require('./common.cjs');
+const { withBranchSnapshot } = require('./branch-snapshot.cjs');
 const {
   readComparisonImageContent,
   readComparisonSectionContent,
@@ -12,11 +20,6 @@ const {
   applyGeneratedAttributeStates,
   readGeneratedAttributeStates,
 } = require('../generated-files.cjs');
-const {
-  readDiffImageContent: readWorkingTreeDiffImageContent,
-  readDiffSectionContent: readWorkingTreeDiffSectionContent,
-  readWorkingTreeState,
-} = require('./working-tree.cjs');
 
 /**
  * @typedef {import('../../core/types.ts').ChangedFile} ChangedFile
@@ -87,7 +90,7 @@ const readCommitParents = async (repoRoot, commit) => {
  * @param {string} repoRoot
  * @param {string} commit
  * @param {string | undefined} firstParent
- * @param {{sort?: boolean}} [options]
+ * @param {{env?: NodeJS.ProcessEnv; sort?: boolean}} [options]
  */
 const readCommitNameStatus = async (repoRoot, commit, firstParent, options = {}) =>
   parseCommitNameStatus(
@@ -96,6 +99,7 @@ const readCommitNameStatus = async (repoRoot, commit, firstParent, options = {})
       firstParent
         ? ['diff', '--name-status', '-r', '-z', '-M', firstParent, commit]
         : ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', '--root', '-M', commit],
+      { env: options.env },
     ),
     options,
   );
@@ -548,78 +552,76 @@ const toBranchComparisonInput = (input) => {
 };
 
 /**
- * Merge a resolved branch-diff `ChangedFile` and a working-tree `ChangedFile`
- * for the same path into a single entry whose sections are the concatenation
- * of both (branch commit section(s) first, then staged/unstaged section(s)),
- * with the fingerprint recomputed from the combined sections.
- * @param {ChangedFile | undefined} branchFile
- * @param {ChangedFile | undefined} workingTreeFile
- * @returns {ChangedFile}
+ * `branch+` compares the existing merge base against a private snapshot of
+ * every pending change staged on top of the branch. The source keeps the real
+ * branch history (`headRef` is the actual HEAD, not a snapshot commit).
+ * @param {string} launchPath
+ * @param {string | BranchSource | BranchDiffSource | BranchWorkingTreeSource} input
  */
-const mergeChangedFile = (branchFile, workingTreeFile) => {
-  if (!branchFile) {
-    return /** @type {ChangedFile} */ (workingTreeFile);
-  }
-
-  if (!workingTreeFile) {
-    return branchFile;
-  }
-
-  const sections = [...branchFile.sections, ...workingTreeFile.sections];
-  const fingerprint = getFingerprint(
-    `${workingTreeFile.status}\n${workingTreeFile.oldPath || branchFile.oldPath || ''}\n${sections
-      .map(
-        (section) =>
-          `${section.loadState || 'ready'}\n${section.binary ? 'binary' : 'text'}\n${
-            section.patch
-          }\n${section.summary?.reason || ''}\n${section.summary?.fingerprint || ''}\n${
-            section.oldFile?.contents || ''
-          }\n${section.newFile?.contents || ''}`,
-      )
-      .join('\n')}`,
+const resolveBranchWorkingTreeComparison = async (launchPath, input) => {
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  const comparison = await resolveBranchComparison(
+    repoRoot,
+    normalizeBranchSourceInput(toBranchComparisonInput(input)),
   );
-
-  return {
-    fingerprint,
-    oldPath: workingTreeFile.oldPath || branchFile.oldPath,
-    path: workingTreeFile.path,
-    sections,
-    // The working-tree status reflects the most current state of the file
-    // (e.g. a branch-added file that was subsequently deleted locally).
-    status: workingTreeFile.status,
+  /** @type {BranchWorkingTreeSource} */
+  const source = {
+    baseRef: comparison.oldRef,
+    headRef: comparison.newRef,
+    ref: comparison.source.ref,
+    type: 'branch-working-tree',
   };
+  return { oldRef: comparison.oldRef, repoRoot, source };
+};
+
+/** @param {string} oldRef */
+const getCombinedSectionRef = (oldRef) => `combined:${oldRef}`;
+
+/**
+ * The snapshot stages conflicted paths as their working contents, so restore
+ * the real `conflicted` status and keep unresolved paths visible even when
+ * their working contents already match the base.
+ * @param {string} repoRoot
+ * @param {import('./branch-snapshot.cjs').BranchSnapshot} snapshot
+ * @param {string} oldRef
+ */
+const readBranchWorkingTreeStatus = async (repoRoot, snapshot, oldRef) => {
+  const status = await readCommitNameStatus(repoRoot, snapshot.tree, oldRef, {
+    env: snapshot.env,
+    sort: false,
+  });
+  const conflicted = new Set(snapshot.conflictedPaths);
+  /** @type {Array<Pick<StatusItem, 'oldPath' | 'path' | 'status'>>} */
+  const items = status.map((item) =>
+    conflicted.has(item.path) ? { ...item, status: 'conflicted' } : item,
+  );
+  const paths = new Set(items.map((item) => item.path));
+  for (const path of conflicted) {
+    if (!paths.has(path)) {
+      items.push({ path, status: 'conflicted' });
+    }
+  }
+  return items;
 };
 
 /**
- * Merge a resolved branch-diff `RepositoryState` and a working-tree
- * `RepositoryState` into a combined `branch-working-tree` state: file lists
- * are unioned by path, and files present in both have their sections
- * concatenated (branch commit section(s) followed by staged/unstaged
- * section(s)).
- * @param {RepositoryState} branchState
- * @param {RepositoryState} workingTreeState
- * @returns {RepositoryState}
+ * Untracked entries the working-tree selection collapses (generated
+ * directories, the untracked-file cap) are not staged into the snapshot; keep
+ * their existing summaries as combined placeholders.
+ * @param {string} repoRoot
+ * @param {StatusItem} item
+ * @param {string} ref
+ * @returns {Promise<ChangedFile>}
  */
-const mergeBranchAndWorkingTreeState = (branchState, workingTreeState) => {
-  const branchSource = /** @type {BranchDiffSource} */ (branchState.source);
-  const branchFilesByPath = new Map(branchState.files.map((file) => [file.path, file]));
-  const workingTreeFilesByPath = new Map(workingTreeState.files.map((file) => [file.path, file]));
-  const paths = [...new Set([...branchFilesByPath.keys(), ...workingTreeFilesByPath.keys()])];
-
-  const files = paths
-    .map((path) => mergeChangedFile(branchFilesByPath.get(path), workingTreeFilesByPath.get(path)))
-    .sort(fileSort);
-
+const createUntrackedPlaceholderFile = async (repoRoot, item, ref) => {
+  const section = await createSection(repoRoot, item, 'unstaged');
   return {
-    ...branchState,
-    files,
-    generatedAt: Date.now(),
-    source: {
-      baseRef: branchSource.baseRef,
-      headRef: branchSource.headRef,
-      ref: branchSource.ref,
-      type: 'branch-working-tree',
-    },
+    fingerprint: getFingerprint(
+      `${ref}\n${item.status}\n${item.path}\n${section.summary?.reason || ''}`,
+    ),
+    path: item.path,
+    sections: [{ ...section, id: `${item.path}:${ref}`, kind: 'combined' }],
+    status: item.status,
   };
 };
 
@@ -630,44 +632,63 @@ const mergeBranchAndWorkingTreeState = (branchState, workingTreeState) => {
  * @returns {Promise<RepositoryState>}
  */
 const readBranchWorkingTreeState = async (launchPath, input, options = {}) => {
-  const [branchState, workingTreeState] = await Promise.all([
-    readBranchState(launchPath, toBranchComparisonInput(input)),
-    readWorkingTreeState(launchPath, {
-      eagerContents: false,
-      showWhitespace: options.showWhitespace,
-    }),
-  ]);
-  return mergeBranchAndWorkingTreeState(branchState, workingTreeState);
+  const { oldRef, repoRoot, source } = await resolveBranchWorkingTreeComparison(launchPath, input);
+  const ref = getCombinedSectionRef(oldRef);
+
+  return withBranchSnapshot(repoRoot, async (snapshot) => {
+    const status = await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef);
+    const [state, placeholders] = await Promise.all([
+      readComparisonState({
+        launchPath,
+        newRef: snapshot.tree,
+        oldRef,
+        options: {
+          env: snapshot.env,
+          section: { kind: 'combined', ref },
+          showWhitespace: options.showWhitespace,
+        },
+        repoRoot,
+        source,
+        status,
+      }),
+      Promise.all(
+        snapshot.untrackedPlaceholders.map((item) =>
+          createUntrackedPlaceholderFile(repoRoot, item, ref),
+        ),
+      ),
+    ]);
+    return { ...state, files: [...state.files, ...placeholders].sort(fileSort) };
+  });
 };
 
 /**
- * By the time a section/image content request comes in for a
- * `branch-working-tree` source, that source is always the fully resolved
- * copy round-tripped from `RepositoryState.source` (baseRef/headRef are only
- * absent momentarily, at CLI-argument construction time, before the initial
- * state has been read).
- * @param {BranchWorkingTreeSource} source
- * @returns {BranchDiffSource}
- */
-const toResolvedBranchDiffSource = (source) => {
-  if (!source.baseRef || !source.headRef) {
-    throw new Error('Cannot load branch-working-tree content before the branch diff is resolved.');
-  }
-
-  return { baseRef: source.baseRef, headRef: source.headRef, ref: source.ref, type: 'branch-diff' };
-};
-
-/**
+ * Lazy reads rebuild the snapshot so they compare the resolved base with the
+ * current final contents, never a committed-only or index-only version.
  * @param {string} launchPath
  * @param {DiffSectionContentRequest} request
  */
-const readBranchWorkingTreeSectionContent = (launchPath, request) => {
-  const source = /** @type {BranchWorkingTreeSource} */ (request.source);
-  return request.kind === 'staged' || request.kind === 'unstaged'
-    ? readWorkingTreeDiffSectionContent(launchPath, request)
-    : readBranchSectionContent(launchPath, toResolvedBranchDiffSource(source), request.path, {
+const readBranchWorkingTreeSectionContent = async (launchPath, request) => {
+  const { oldRef, repoRoot } = await resolveBranchWorkingTreeComparison(
+    launchPath,
+    /** @type {BranchWorkingTreeSource} */ (request.source),
+  );
+
+  return withBranchSnapshot(repoRoot, async (snapshot) =>
+    readComparisonSectionContent(
+      repoRoot,
+      snapshot.tree,
+      oldRef,
+      await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef),
+      request.path,
+      'branch',
+      {
+        env: snapshot.env,
         force: request.force,
-      });
+        section: { kind: 'combined', ref: getCombinedSectionRef(oldRef) },
+        showWhitespace: request.showWhitespace,
+      },
+    ),
+  );
 };
 
 /**
@@ -675,11 +696,29 @@ const readBranchWorkingTreeSectionContent = (launchPath, request) => {
  * @param {DiffImageContentRequest} request
  * @returns {Promise<DiffImageContentResult>}
  */
-const readBranchWorkingTreeImageContent = (launchPath, request) => {
-  const source = /** @type {BranchWorkingTreeSource} */ (request.source);
-  return request.kind === 'staged' || request.kind === 'unstaged'
-    ? readWorkingTreeDiffImageContent(launchPath, request)
-    : readBranchImageContent(launchPath, toResolvedBranchDiffSource(source), request.path);
+const readBranchWorkingTreeImageContent = async (launchPath, request) => {
+  try {
+    const { oldRef, repoRoot } = await resolveBranchWorkingTreeComparison(
+      launchPath,
+      /** @type {BranchWorkingTreeSource} */ (request.source),
+    );
+    return await withBranchSnapshot(repoRoot, async (snapshot) =>
+      readComparisonImageContent(
+        repoRoot,
+        snapshot.tree,
+        oldRef,
+        await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef),
+        request.path,
+        'branch',
+        snapshot.env,
+      ),
+    );
+  } catch (error) {
+    return {
+      reason: error instanceof Error ? error.message : 'Codiff could not load this image.',
+      status: 'unavailable',
+    };
+  }
 };
 
 /** @param {string} launchPath @param {number} [limit] @param {string} [ref] */

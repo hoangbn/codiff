@@ -163,7 +163,7 @@ const isEditableWorkingTreeSection = (
   (sourceType === 'working-tree' || sourceType === 'branch-working-tree') &&
   file.status !== 'deleted' &&
   file.sections.at(-1)?.id === section.id &&
-  (section.kind === 'staged' || section.kind === 'unstaged');
+  (section.kind === 'combined' || section.kind === 'staged' || section.kind === 'unstaged');
 
 function CopyFilePathButton({ path }: { path: string }) {
   const [copied, markCopied] = useCopiedState(1600);
