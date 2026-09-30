@@ -561,7 +561,17 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
   );
 });
 
-test.each(['HEAD^{/..}', 'HEAD^{/.. }', 'HEAD^{/.*.. .*}', 'HEAD~1..HEAD^{/..}'])(
+test.each([
+  'HEAD^{/..}',
+  'HEAD^{/.. }',
+  'HEAD^{/.*.. .*}',
+  'HEAD~1..HEAD^{/..}',
+  'HEAD~1..HEAD^{/.. }',
+  'HEAD~1..HEAD^{/.*.. .*}',
+  'HEAD~1...HEAD^{/..}',
+  'HEAD~1...HEAD^{/.. }',
+  'HEAD~1...HEAD^{/.*.. .*}',
+])(
   'dotted revision %s preserves native source content through every launch entry',
   async (target) => {
     await using logger = await createFakeOpenLogger();
@@ -577,13 +587,14 @@ test.each(['HEAD^{/..}', 'HEAD^{/.. }', 'HEAD^{/.*.. .*}', 'HEAD~1..HEAD^{/..}']
     const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
     const { readRepositoryState } = require('../../electron/git-state.cjs');
     const range = target.startsWith('HEAD~1..');
-    await git(repositoryPath, [
-      'rev-parse',
-      '--verify',
-      `${range ? 'HEAD^{/..}' : target}^{commit}`,
-    ]);
+    const separator = target.startsWith('HEAD~1...') ? '...' : '..';
+    const head = range ? target.slice(`HEAD~1${separator}`.length) : target;
+    await git(repositoryPath, ['rev-parse', '--verify', `${head}^{commit}`]);
+    if (range) {
+      await git(repositoryPath, ['rev-parse', '--symbolic', target]);
+    }
     const expectedSource = range
-      ? { base: 'HEAD~1', head: 'HEAD^{/..}', symmetric: false, type: 'range' }
+      ? { base: 'HEAD~1', head, symmetric: separator === '...', type: 'range' }
       : { ref: target, type: 'commit' };
     for (const targets of range ? [[target]] : [[target], ['--commit', target]]) {
       const parsed = parseArguments([...targets, repositoryPath]);

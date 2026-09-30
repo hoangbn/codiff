@@ -30,7 +30,7 @@ const isExplicitPathArgument = (arg) =>
   arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../');
 
 // `base...head` (symmetric / merge-base) or `base..head` (direct) range syntax.
-const rangeArgumentPattern = /^([^.][^\s]*?)(\.\.\.?)([^.][^\s]*)$/;
+const rangeArgumentPattern = /^([^.].*?)(\.\.\.?)([^.].*)$/s;
 /** @param {string} arg @returns {{ base: string; head: string; symmetric: boolean } | null} */
 const parseRangeArgument = (arg) => {
   if (isExplicitPathArgument(arg)) {
