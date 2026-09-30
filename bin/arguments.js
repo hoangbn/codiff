@@ -8,6 +8,11 @@ const { parseReviewUrl, resolveReviewUrl } = reviewSource;
 
 export const flagDefinitions = [
   {
+    description: 'Print desktop-source-v1 launch capabilities, then exit.',
+    name: 'capabilities',
+    type: 'boolean',
+  },
+  {
     argument: '<codex|claude|opencode|pi>',
     description: 'Override the agent backend for this session.',
     name: 'agent',
