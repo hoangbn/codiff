@@ -561,6 +561,102 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
   );
 });
 
+test.each([
+  'HEAD^{/..}',
+  'HEAD^{/.. }',
+  'HEAD^{/.*.. .*}',
+  'HEAD~1..HEAD^{/..}',
+  'HEAD~1..HEAD^{/.. }',
+  'HEAD~1..HEAD^{/.*.. .*}',
+  'HEAD~1...HEAD^{/..}',
+  'HEAD~1...HEAD^{/.. }',
+  'HEAD~1...HEAD^{/.*.. .*}',
+])(
+  'dotted revision %s preserves native source content through every launch entry',
+  async (target) => {
+    await using logger = await createFakeOpenLogger();
+    const repositoryPath = join(logger.directory, 'repo');
+    await mkdir(repositoryPath);
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
+    await writeFile(join(repositoryPath, 'feature.txt'), 'feature\n');
+    await git(repositoryPath, ['add', '.']);
+    await git(repositoryPath, ['commit', '-m', 'feature-only change']);
+    await writeFile(join(repositoryPath, 'local.txt'), 'must not substitute local changes\n');
+    const require = createRequire(import.meta.url);
+    const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+    const { readRepositoryState } = require('../../electron/git-state.cjs');
+    const range = target.startsWith('HEAD~1..');
+    const separator = target.startsWith('HEAD~1...') ? '...' : '..';
+    const head = range ? target.slice(`HEAD~1${separator}`.length) : target;
+    await git(repositoryPath, ['rev-parse', '--verify', `${head}^{commit}`]);
+    if (range) {
+      await git(repositoryPath, ['rev-parse', '--symbolic', target]);
+    }
+    const expectedSource = range
+      ? { base: 'HEAD~1', head, symmetric: separator === '...', type: 'range' }
+      : { ref: target, type: 'commit' };
+    for (const targets of range ? [[target]] : [[target], ['--commit', target]]) {
+      const parsed = parseArguments([...targets, repositoryPath]);
+      const nodeSource = getReviewSource({
+        branchRef: parsed.branchRef ?? null,
+        commitRef: parsed.commitRef,
+        pullRequestProvider: parsed.pullRequestProvider ?? null,
+        pullRequestUrl: parsed.pullRequestUrl,
+        range: parsed.range ?? null,
+      });
+      await logger.reset();
+      await execFileAsync(resolve('bin/codiff-app'), [...targets, repositoryPath], {
+        env: logger.env,
+      });
+      const sources = [
+        nodeSource,
+        getCommandLineLaunchOptions(['Codiff', ...targets, repositoryPath]).source,
+        getCommandLineLaunchOptions(['Codiff', ...(await logger.readArgs()).slice(3)]).source,
+      ];
+      for (const source of sources) {
+        expect(source).toEqual(expectedSource);
+        const state = await readRepositoryState(repositoryPath, source);
+        expect(state.files.map((file: { path: string }) => file.path)).toEqual(['feature.txt']);
+      }
+    }
+  },
+);
+
+test('Git-invalid dotted-left composite rejects without substituting local content', async () => {
+  await using logger = await createFakeOpenLogger();
+  await logger.reset();
+  const repositoryPath = join(logger.directory, 'repo');
+  await mkdir(repositoryPath);
+  await git(repositoryPath, ['init']);
+  await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
+  await writeFile(join(repositoryPath, 'local.txt'), 'must not substitute local changes\n');
+  const target = 'HEAD^{/..}..HEAD';
+  await git(repositoryPath, ['rev-parse', '--verify', 'HEAD^{/..}^{commit}']);
+  await expect(git(repositoryPath, ['rev-parse', '--symbolic', target])).rejects.toThrow();
+  const require = createRequire(import.meta.url);
+  const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+  const { readRepositoryState } = require('../../electron/git-state.cjs');
+  const parsed = parseArguments([target, repositoryPath]);
+  for (const source of [
+    getReviewSource({
+      branchRef: parsed.branchRef ?? null,
+      commitRef: parsed.commitRef,
+      pullRequestProvider: parsed.pullRequestProvider ?? null,
+      pullRequestUrl: parsed.pullRequestUrl,
+      range: parsed.range ?? null,
+    }),
+    getCommandLineLaunchOptions(['Codiff', target, repositoryPath]).source,
+  ]) {
+    expect(source.type).toBe('range');
+    await expect(readRepositoryState(repositoryPath, source)).rejects.toThrow();
+  }
+  await expect(
+    execFileAsync(resolve('bin/codiff-app'), [target, repositoryPath], { env: logger.env }),
+  ).rejects.toThrow('invalid range');
+  expect(await logger.readArgs()).toEqual(['']);
+});
+
 test.each(['node', 'electron'])(
   '%s range entry rejects missing endpoints instead of local content',
   async (entry) => {
