@@ -167,6 +167,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
   let pullRequestNumber = null;
   let pullRequestProvider = null;
   let pullRequestUrl = null;
+  let providerSourceCount = 0;
   let repositoryPath = null;
   let sourceCandidate = null;
   let rangeCandidate = null;
@@ -181,41 +182,44 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       repositoryPath ??= arg;
       continue;
     }
-    const parsedPullRequestUrl = pullRequestUrl ? null : parsePullRequestUrlArgument(arg);
+    const parsedPullRequestUrl = parsePullRequestUrlArgument(arg);
     if (parsedPullRequestUrl) {
+      providerSourceCount += 1;
       pullRequestUrl = parsedPullRequestUrl;
       continue;
     }
 
-    if (!pullRequestUrl && pullRequestNumber == null) {
-      const number = parsePullRequestNumberArgument(arg);
-      if (number != null) {
-        pullRequestNumber = number;
-        continue;
-      }
+    const number = parsePullRequestNumberArgument(arg);
+    if (number != null) {
+      providerSourceCount += 1;
+      pullRequestNumber = number;
+      continue;
+    }
 
-      const markerProvider = getReviewProviderMarker(arg);
-      const nextNumber = markerProvider
-        ? parsePullRequestNumberValue(positionals[index + 1] ?? '')
-        : null;
-      if (nextNumber != null) {
-        pullRequestNumber = nextNumber;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
-      }
-      const nextUrl = markerProvider
-        ? parsePullRequestUrlArgument(positionals[index + 1] ?? '')
-        : null;
-      if (nextUrl) {
-        pullRequestUrl = nextUrl;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
-      }
-      if (markerProvider) {
-        throw new Error('Provider review source requires a number or URL.');
-      }
+    const markerProvider = getReviewProviderMarker(arg);
+    if (markerProvider) {
+      providerSourceCount += 1;
+    }
+    const nextNumber = markerProvider
+      ? parsePullRequestNumberValue(positionals[index + 1] ?? '')
+      : null;
+    if (nextNumber != null) {
+      pullRequestNumber = nextNumber;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    const nextUrl = markerProvider
+      ? parsePullRequestUrlArgument(positionals[index + 1] ?? '')
+      : null;
+    if (nextUrl) {
+      pullRequestUrl = nextUrl;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    if (markerProvider) {
+      throw new Error('Provider review source requires a number or URL.');
     }
 
     reviewPositionals.push(arg);
@@ -231,7 +235,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     branchRef,
     commitRef,
     positionalSources: positionalInputs.sourceCandidates,
-    providerSource: pullRequestUrl || pullRequestNumber,
+    providerSourceCount,
   });
   const range =
     rangeCandidate && !isCommitRef(resolve(repositoryPath || process.cwd()), rangeCandidate)

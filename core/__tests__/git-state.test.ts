@@ -538,8 +538,8 @@ test('parseGitHubPullRequestUrl rejects values that are not GitHub pull requests
 });
 
 test('validateRepositoryPath returns normalized repository paths', () => {
-  expect(validateRepositoryPath('src/./file.ts')).toBe(join('src', 'file.ts'));
-  expect(validateRepositoryPath('src//nested/file.ts')).toBe(join('src', 'nested', 'file.ts'));
+  expect(validateRepositoryPath('src/./file.ts')).toBe('src/file.ts');
+  expect(validateRepositoryPath('src//nested/file.ts')).toBe('src/nested/file.ts');
 });
 
 test('validateRepositoryPath rejects traversal segments', () => {

@@ -288,6 +288,7 @@ expect_commit_ref=0
 branch_ref_provided=0
 commit_ref_provided=0
 review_positional_count=0
+provider_source_count=0
 expect_pull_request_value=0
 expect_walkthrough_context=0
 expect_walkthrough_file=0
@@ -559,15 +560,19 @@ for arg in "$@"; do
     -*)
       ;;
     *)
-      if [ -z "$pull_request_source" ] && printf '%s' "$arg" | grep -Eiq '^(pr|pull-request)$'; then
+      if printf '%s' "$arg" | grep -Eiq '^(pr|pull-request)$'; then
+        provider_source_count=$((provider_source_count + 1))
         pull_request_provider="pr"
         expect_pull_request_value=1
-      elif [ -z "$pull_request_source" ] && printf '%s' "$arg" | grep -Eiq '^(mr|merge-request)$'; then
+      elif printf '%s' "$arg" | grep -Eiq '^(mr|merge-request)$'; then
+        provider_source_count=$((provider_source_count + 1))
         pull_request_provider="mr"
         expect_pull_request_value=1
-      elif [ -z "$pull_request_source" ] && printf '%s' "$arg" | grep -Eq '^#[1-9][0-9]*$'; then
+      elif printf '%s' "$arg" | grep -Eq '^#[1-9][0-9]*$'; then
+        provider_source_count=$((provider_source_count + 1))
         pull_request_source="$arg"
-      elif [ -z "$pull_request_source" ] && is_review_url_arg "$arg"; then
+      elif is_review_url_arg "$arg"; then
+        provider_source_count=$((provider_source_count + 1))
         pull_request_source="$arg"
       else
         review_positional_count=$((review_positional_count + 1))
@@ -607,17 +612,15 @@ if [ "$branch_ref_provided" -gt 0 ] && { [ -z "$branch_ref" ] || [ "$expect_bran
   printf '%s\n' 'codiff: --branch requires a nonempty revision.' >&2
   exit 1
 fi
-selector_count=$((commit_ref_provided + branch_ref_provided))
+selector_count=$((commit_ref_provided + branch_ref_provided + provider_source_count))
 repository_context="${repository_path:-$PWD}"
 if [ -n "$repository_path" ] && ! is_explicit_path_arg "$repository_path" &&
   { [ "${repository_path#*..}" != "$repository_path" ] || is_git_commit_ref "$PWD" "$repository_path"; }; then
   selector_count=$((selector_count + 1))
 fi
-if [ -n "$pull_request_source" ] || [ -n "$pull_request_branch" ]; then
-  selector_count=$((selector_count + 1))
-fi
 if [ -n "$source_ref" ] && [ -z "$plan_file_path" ]; then
-  if [ -e "$source_ref" ] && [ -z "$repository_path" ] && ! is_git_commit_ref "$repository_context" "$source_ref"; then
+  if [ -e "$source_ref" ] && [ -z "$repository_path" ] &&
+    [ "${source_ref#*..}" = "$source_ref" ] && ! is_git_commit_ref "$repository_context" "$source_ref"; then
     repository_path="$source_ref"
     source_ref=""
   else

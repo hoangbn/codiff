@@ -37,13 +37,22 @@ const getReviewPositionals = (positionals) => {
   if (explicitPaths.length > 1) {
     throw new Error('Choose only one repository path for the review source.');
   }
+  if (
+    explicitPaths.length === 0 &&
+    positionals.length === 1 &&
+    gitSucceeds(process.cwd(), ['rev-parse', '--verify', `${positionals[0]}^{commit}`])
+  ) {
+    return { repositoryPath: undefined, sourceCandidates: positionals };
+  }
+  const implicitPaths = positionals.filter(
+    (value) => !value.includes('..') && existsSync(resolve(value)),
+  );
   const repositoryPath =
     explicitPaths[0] ??
-    positionals.find(
-      (value) =>
-        existsSync(resolve(value)) &&
-        !gitSucceeds(process.cwd(), ['rev-parse', '--verify', `${value}^{commit}`]),
-    );
+    implicitPaths.findLast((value) =>
+      gitSucceeds(resolve(value), ['rev-parse', '--show-toplevel']),
+    ) ??
+    implicitPaths.at(-1);
   const repositoryIndex = positionals.indexOf(repositoryPath);
   const sourceCandidates = positionals.filter((_value, index) => index !== repositoryIndex);
   if (
@@ -57,9 +66,14 @@ const getReviewPositionals = (positionals) => {
   return { repositoryPath, sourceCandidates };
 };
 
-const validateReviewSelectors = ({ commitRef, branchRef, positionalSources, providerSource }) => {
+const validateReviewSelectors = ({
+  commitRef,
+  branchRef,
+  positionalSources,
+  providerSourceCount,
+}) => {
   if (
-    [commitRef, branchRef, providerSource].filter(Boolean).length + positionalSources.length >
+    [commitRef, branchRef].filter(Boolean).length + positionalSources.length + providerSourceCount >
     1
   ) {
     throw new Error('Choose only one review source: commit, branch, range, or provider.');

@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  symlink,
   truncate,
   writeFile,
 } from 'node:fs/promises';
@@ -652,6 +653,9 @@ test.each([
   { selectors: ['mr', 'base'] },
   { selectors: ['mr', '--commit', 'HEAD'] },
   { selectors: ['mr', '--branch', 'base'] },
+  { selectors: ['pr', 'base', 'pr', 'target'] },
+  { selectors: ['pr', 'base', '#2'] },
+  { selectors: ['pr', 'base', 'https://github.com/o/r/pull/2'] },
 ])(
   'invalid review selectors %j fail before launching another comparison',
   async ({ selectors }) => {
@@ -697,6 +701,62 @@ test('a branch matching a local directory still conflicts with a provider source
   });
   expect(await logger.readArgs()).toEqual(['']);
 });
+
+test('relative checkout selection resolves a directory-shaped branch against that checkout', async () => {
+  await using logger = await createFakeOpenLogger();
+  await mkdir(join(logger.directory, 'base'));
+  await symlink(refRepositoryPath, join(logger.directory, 'repo'), 'dir');
+  const require = createRequire(import.meta.url);
+  const {
+    getCommandLineLaunchOptions,
+    getCommandLineRepositoryPath,
+  } = require('../../electron/main/command-line.cjs');
+  await withCwd(logger.directory, async () => {
+    const requestedPath = join(process.cwd(), 'repo');
+    expect(parseArguments(['base', 'repo'])).toMatchObject({
+      branchRef: 'base',
+      requestedPath,
+    });
+    expect(getCommandLineLaunchOptions(['Codiff', 'base', 'repo']).source).toMatchObject({
+      ref: 'base',
+      type: 'branch-working-tree',
+    });
+    expect(getCommandLineRepositoryPath(['Codiff', 'base', 'repo'])).toBe('repo');
+    await execFileAsync(resolve(import.meta.dirname, '../../bin/codiff-app'), ['base', 'repo'], {
+      cwd: logger.directory,
+      env: logger.env,
+    });
+  });
+  expect(await logger.readArgs()).toContain('--branch');
+  expect(await logger.readArgs()).toContain('base');
+});
+
+test.each(['HEAD~1..HEAD', 'HEAD~1...HEAD', 'missing..HEAD'])(
+  'range-shaped directory %s does not erase an explicit comparison',
+  async (target) => {
+    await mkdir(join(refRepositoryPath, target));
+    await using logger = await createFakeOpenLogger();
+    await logger.reset();
+    const require = createRequire(import.meta.url);
+    const { getCommandLineLaunchOptions } = require('../../electron/main/command-line.cjs');
+    await withCwd(refRepositoryPath, async () => {
+      expect(parseArguments([target]).range).toBeDefined();
+      expect(getCommandLineLaunchOptions(['Codiff', target]).source.type).toBe('range');
+      const launch = execFileAsync(resolve(import.meta.dirname, '../../bin/codiff-app'), [target], {
+        cwd: refRepositoryPath,
+        env: logger.env,
+      });
+      if (target.startsWith('missing')) {
+        await expect(launch).rejects.toThrow(/invalid range/);
+        expect(await logger.readArgs()).toEqual(['']);
+      } else {
+        await launch;
+        expect(await logger.readArgs()).toContain(target);
+      }
+      expect(parseArguments([`./${target}`]).range).toBeUndefined();
+    });
+  },
+);
 
 test('Git-invalid dotted-left composite rejects without substituting local content', async () => {
   await using logger = await createFakeOpenLogger();

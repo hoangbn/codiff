@@ -363,6 +363,7 @@ export const parseArguments = (args) => {
   let pullRequestNumber = null;
   let pullRequestProvider = null;
   let pullRequestUrl = null;
+  let providerSourceCount = 0;
   let requestedPath = null;
   let sourceCandidate = null;
   let rangeCandidate = null;
@@ -378,48 +379,51 @@ export const parseArguments = (args) => {
       requestedPath ??= arg;
       continue;
     }
-    const parsedPullRequestUrl = pullRequestUrl ? null : parsePullRequestUrlArgument(arg);
+    const parsedPullRequestUrl = parsePullRequestUrlArgument(arg);
     if (parsedPullRequestUrl) {
+      providerSourceCount += 1;
       pullRequestUrl = parsedPullRequestUrl;
       continue;
     }
 
-    if (!pullRequestUrl && pullRequestNumber == null) {
-      const number = parsePullRequestNumberArgument(arg);
-      if (number != null) {
-        pullRequestNumber = number;
-        continue;
-      }
+    const number = parsePullRequestNumberArgument(arg);
+    if (number != null) {
+      providerSourceCount += 1;
+      pullRequestNumber = number;
+      continue;
+    }
 
-      const markerProvider = getReviewProviderMarker(arg);
-      const nextValue = markerProvider ? positionals[index + 1] : null;
-      const nextNumber = nextValue ? parsePullRequestNumberValue(nextValue) : null;
-      if (nextNumber != null) {
-        pullRequestNumber = nextNumber;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
+    const markerProvider = getReviewProviderMarker(arg);
+    if (markerProvider) {
+      providerSourceCount += 1;
+    }
+    const nextValue = markerProvider ? positionals[index + 1] : null;
+    const nextNumber = nextValue ? parsePullRequestNumberValue(nextValue) : null;
+    if (nextNumber != null) {
+      pullRequestNumber = nextNumber;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    const parsedNextValue =
+      markerProvider && nextValue ? parsePullRequestUrlArgument(nextValue) : null;
+    if (parsedNextValue) {
+      pullRequestProvider = markerProvider;
+      pullRequestUrl = parsedNextValue;
+      index += 1;
+      continue;
+    }
+    if (markerProvider === 'github' && nextValue) {
+      if (isExplicitPathArgument(nextValue) || !nextValue.trim() || nextValue.startsWith('-')) {
+        throw new Error('GitHub review source requires a number, URL, or branch.');
       }
-      const parsedNextValue =
-        markerProvider && nextValue ? parsePullRequestUrlArgument(nextValue) : null;
-      if (parsedNextValue) {
-        pullRequestProvider = markerProvider;
-        pullRequestUrl = parsedNextValue;
-        index += 1;
-        continue;
-      }
-      if (markerProvider === 'github' && nextValue) {
-        if (isExplicitPathArgument(nextValue) || !nextValue.trim() || nextValue.startsWith('-')) {
-          throw new Error('GitHub review source requires a number, URL, or branch.');
-        }
-        pullRequestBranch = nextValue;
-        pullRequestProvider = markerProvider;
-        index += 1;
-        continue;
-      }
-      if (markerProvider) {
-        throw new Error('Provider review source requires a valid target.');
-      }
+      pullRequestBranch = nextValue;
+      pullRequestProvider = markerProvider;
+      index += 1;
+      continue;
+    }
+    if (markerProvider) {
+      throw new Error('Provider review source requires a valid target.');
     }
 
     reviewPositionals.push(arg);
@@ -435,7 +439,7 @@ export const parseArguments = (args) => {
     branchRef,
     commitRef,
     positionalSources: positionalInputs.sourceCandidates,
-    providerSource: pullRequestUrl || pullRequestNumber || pullRequestBranch,
+    providerSourceCount,
   });
   const repositoryPath = resolve(requestedPath ?? process.cwd());
   const range =

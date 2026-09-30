@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve, win32 } from 'node:path';
 import { promisify } from 'node:util';
@@ -149,7 +149,7 @@ const withProvider = async (
   await writeFile(
     command,
     `#!/usr/bin/env node
-const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, readFileSync, renameSync, writeFileSync } = require('node:fs');
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + '\\n');
 const responses = JSON.parse(readFileSync(${JSON.stringify(responsesPath)}, 'utf8'));
@@ -163,7 +163,9 @@ const value = endpoint.includes('/files?') || endpoint.includes('/diffs?')
       ? responses.diff
       : JSON.stringify(responses.metadata);
 if (responses.nextMetadata && value === JSON.stringify(responses.metadata)) {
-  writeFileSync(${JSON.stringify(responsesPath)}, JSON.stringify({ ...responses, metadata: responses.nextMetadata, nextMetadata: undefined }));
+  const temporaryPath = ${JSON.stringify(responsesPath)} + '.' + process.pid;
+  writeFileSync(temporaryPath, JSON.stringify({ ...responses, metadata: responses.nextMetadata, nextMetadata: undefined }));
+  renameSync(temporaryPath, ${JSON.stringify(responsesPath)});
 }
 process.stdout.write(value);
 `,
@@ -188,8 +190,11 @@ process.stdout.write(value);
     },
     reader: provider === 'github' ? readPullRequestSectionContent : readMergeRequestSectionContent,
     calls: () => readFile(callsPath, 'utf8'),
-    updateResponses: (overrides) =>
-      writeFile(responsesPath, JSON.stringify({ ...responses, ...overrides })),
+    updateResponses: async (overrides) => {
+      const temporaryPath = `${responsesPath}.${process.pid}`;
+      await writeFile(temporaryPath, JSON.stringify({ ...responses, ...overrides }));
+      await rename(temporaryPath, responsesPath);
+    },
   });
 };
 
@@ -501,22 +506,54 @@ for (const provider of ['github', 'gitlab'] as const) {
   });
 }
 
-test('provider paths stay POSIX under Windows while filesystem paths stay native', async () => {
+test('repository keys stay POSIX under Windows while filesystem paths stay native', async () => {
+  const filesystemPaths: Array<string> = [];
   const simulatedModule = {
     exports: {} as {
+      readFileStat: (repoRoot: string, path: string) => Promise<unknown>;
       validateProviderPath: (path: string) => string;
       validateRepositoryPath: (path: string) => string;
     },
   };
   runInNewContext(await readFile(resolve('electron/git-state/common.cjs'), 'utf8'), {
     module: simulatedModule,
-    require: (specifier: string) => (specifier === 'node:path' ? win32 : require(specifier)),
+    require: (specifier: string) =>
+      specifier === 'node:path'
+        ? win32
+        : specifier === 'node:fs'
+          ? {
+              promises: {
+                lstat: async (path: string) => {
+                  filesystemPaths.push(path);
+                },
+              },
+            }
+          : require(specifier),
     Buffer,
     process,
   });
   expect(simulatedModule.exports.validateProviderPath('src/nested.txt')).toBe('src/nested.txt');
-  expect(simulatedModule.exports.validateRepositoryPath('src/nested.txt')).toBe('src\\nested.txt');
-  expect(() => simulatedModule.exports.validateProviderPath('../outside.txt')).toThrow(
-    'Invalid repository path',
+  expect(simulatedModule.exports.validateRepositoryPath('src/./nested.txt')).toBe('src/nested.txt');
+  await simulatedModule.exports.readFileStat(
+    String.raw`C:\repo`,
+    simulatedModule.exports.validateRepositoryPath('src/nested.txt'),
   );
+  expect(filesystemPaths).toEqual([String.raw`C:\repo\src\nested.txt`]);
+  for (const path of [
+    '',
+    '.',
+    '\0',
+    '../outside.txt',
+    String.raw`src\..\outside.txt`,
+    '/outside.txt',
+    String.raw`C:\outside.txt`,
+    String.raw`\\server\share\outside.txt`,
+  ]) {
+    expect(() => simulatedModule.exports.validateRepositoryPath(path)).toThrow(
+      'Invalid repository path',
+    );
+    expect(() => simulatedModule.exports.validateProviderPath(path)).toThrow(
+      'Invalid repository path',
+    );
+  }
 });
