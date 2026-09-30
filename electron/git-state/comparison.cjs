@@ -22,18 +22,24 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  * @typedef {{
  *   env?: NodeJS.ProcessEnv;
  *   force?: boolean;
+ *   includeRenameSources?: boolean;
  *   section?: {kind: DiffSection['kind']; ref: string};
  *   showWhitespace?: boolean;
  * }} ComparisonOptions
  */
 
 /**
- * Rename detection needs both sides in the pathspec; a one-path pathspec turns a
- * rename into an addition.
+ * Combined snapshots include both rename endpoints; historical comparisons
+ * retain their destination-only pathspec.
  * @param {ReadonlyArray<Pick<StatusItem, 'oldPath' | 'path'>>} items
+ * @param {ComparisonOptions} options
  */
-const getPathspec = (items) => [
-  ...new Set(items.flatMap((item) => (item.oldPath ? [item.oldPath, item.path] : [item.path]))),
+const getPathspec = (items, options) => [
+  ...new Set(
+    items.flatMap((item) =>
+      options.includeRenameSources && item.oldPath ? [item.oldPath, item.path] : [item.path],
+    ),
+  ),
 ];
 
 /**
@@ -51,7 +57,7 @@ const createComparisonPatchArgs = (newRef, oldRef, items, options) => [
   ...(oldRef ? [oldRef] : []),
   newRef,
   '--',
-  ...getPathspec(items),
+  ...getPathspec(items, options),
 ];
 
 /**

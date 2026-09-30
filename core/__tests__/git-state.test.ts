@@ -1365,6 +1365,51 @@ test('readRepositoryState preserves numstat for committed paths with tabs', asyn
   });
 });
 
+test('committed comparisons preserve destination-only rename patches', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'old.txt', 'one\ntwo\nthree\nfour\n');
+    await commitAll(repo, 'base');
+    const target = (await git(repo, ['branch', '--show-current'])).trim();
+    const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    await git(repo, ['checkout', '-b', 'feature']);
+    await git(repo, ['mv', 'old.txt', 'new.txt']);
+    await commitAll(repo, 'rename');
+    const head = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    const expectedPatch = await git(repo, [
+      'diff',
+      '--patch',
+      '--no-ext-diff',
+      '--find-renames',
+      base,
+      head,
+      '--',
+      'new.txt',
+    ]);
+    expect(expectedPatch).toContain('new file mode');
+    const sources: ReadonlyArray<ReviewSource> = [
+      { ref: head, type: 'commit' },
+      { base, head, symmetric: false, type: 'range' },
+      { ref: target, type: 'branch' },
+      { baseRef: base, headRef: head, ref: target, type: 'branch-diff' },
+    ];
+    for (const source of sources) {
+      const state = await readRepositoryState(repo, source);
+      expect(state.files[0]).toMatchObject({
+        oldPath: 'old.txt',
+        path: 'new.txt',
+        status: 'renamed',
+      });
+      expect(state.files[0].sections[0].patch).toBe(expectedPatch);
+      const section = await readDiffSectionContent(repo, {
+        kind: 'commit',
+        path: 'new.txt',
+        source: state.source,
+      });
+      expect(section.patch).toBe(expectedPatch);
+    }
+  });
+});
+
 test('readRepositoryState opens branch refs as current branch diffs against the target branch', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');
@@ -1519,6 +1564,12 @@ test('branch+ stages from the real index: cached removals, force-added ignored f
     expect(byPath.get('force.txt')?.sections[0].newFile?.contents).toBe('force edited on disk\n');
     expect(byPath.get('new.txt')).toMatchObject({ oldPath: 'old.txt', status: 'renamed' });
     expect(byPath.get('new.txt')?.sections[0].patch).toContain('rename from old.txt');
+    const renamedSection = await readDiffSectionContent(repo, {
+      kind: 'combined',
+      path: 'new.txt',
+      source: state.source,
+    });
+    expect(renamedSection.patch).toBe(byPath.get('new.txt')?.sections[0].patch);
     expect(byPath.get('moved.txt')?.status).toBe('added');
     expect(byPath.get('rewrite.txt')?.status).toBe('deleted');
 
@@ -1527,9 +1578,23 @@ test('branch+ stages from the real index: cached removals, force-added ignored f
     expect(state.files.map(({ oldPath, path, status }) => ({ oldPath, path, status }))).toEqual(
       committed.files.map(({ oldPath, path, status }) => ({ oldPath, path, status })),
     );
-    expect(state.files.map((file) => file.sections[0].patch)).toEqual(
-      committed.files.map((file) => file.sections[0].patch),
-    );
+    for (const file of state.files) {
+      const committedFile = committed.files.find((item) => item.path === file.path);
+      expect(file.sections[0].oldFile?.contents).toBe(committedFile?.sections[0].oldFile?.contents);
+      expect(file.sections[0].newFile?.contents).toBe(committedFile?.sections[0].newFile?.contents);
+      expect(file.sections[0].patch).toBe(
+        await git(repo, [
+          'diff',
+          '--patch',
+          '--no-ext-diff',
+          '--find-renames',
+          target,
+          'HEAD',
+          '--',
+          ...(file.oldPath ? [file.oldPath, file.path] : [file.path]),
+        ]),
+      );
+    }
   });
 });
 

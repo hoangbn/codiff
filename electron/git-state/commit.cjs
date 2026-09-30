@@ -644,6 +644,7 @@ const readBranchWorkingTreeState = async (launchPath, input, options = {}) => {
         oldRef,
         options: {
           env: snapshot.env,
+          includeRenameSources: true,
           section: { kind: 'combined', ref },
           showWhitespace: options.showWhitespace,
         },
@@ -684,6 +685,7 @@ const readBranchWorkingTreeSectionContent = async (launchPath, request) => {
       {
         env: snapshot.env,
         force: request.force,
+        includeRenameSources: true,
         section: { kind: 'combined', ref: getCombinedSectionRef(oldRef) },
         showWhitespace: request.showWhitespace,
       },
