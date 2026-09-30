@@ -564,6 +564,7 @@ test.each(['..', '...'])('packaged helper delivers native %s range content', asy
 
 test.each([
   ':/feature..message',
+  ':/feature..message|fallback',
   'HEAD^{/..}',
   'HEAD^{/.. }',
   'HEAD^{/.*.. .*}',
