@@ -15,7 +15,7 @@ import {
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { expect, test } from 'vite-plus/test';
+import { expect, test, vi } from 'vite-plus/test';
 import { fileHasVisibleDiff, getDiffLineCount } from '../lib/diff.ts';
 import type {
   DiffImageContentRequest,
@@ -1768,6 +1768,47 @@ test('branch+ reads C-quoted alternate object paths without changing their times
     const after = await stat(objectPath, { bigint: true });
     expect(after.mtimeNs).toBe(before.mtimeNs);
     expect(after.ctimeNs).toBe(before.ctimeNs);
+  });
+});
+
+test('branch+ retries a cache copy interrupted by Git repacking', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'file.txt', 'base\n');
+    await commitAll(repo, 'base');
+    const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
+    const objectPath = await realpath(
+      join(repo, '.git/objects', object.slice(0, 2), object.slice(2)),
+    );
+    await writeRepoFile(repo, 'file.txt', 'working\n');
+    const fsPromises = require('node:fs').promises as typeof import('node:fs/promises');
+    const copy = fsPromises.cp;
+    let repacked = false;
+    const copySpy = vi
+      .spyOn(fsPromises, 'cp')
+      .mockImplementationOnce((source, destination, options) =>
+        copy(source, destination, {
+          ...options,
+          filter: async (filename, target) => {
+            if (filename === objectPath && !repacked) {
+              await git(repo, ['repack', '-ad']);
+              repacked = true;
+            }
+            return (await options?.filter?.(filename, target)) ?? true;
+          },
+        }),
+      );
+    try {
+      const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+      expect(repacked).toBe(true);
+      expect(copySpy).toHaveBeenCalledTimes(2);
+      expect(state.files[0].sections[0]).toMatchObject({
+        newFile: { contents: 'working\n' },
+        oldFile: { contents: 'base\n' },
+      });
+    } finally {
+      copySpy.mockRestore();
+    }
   });
 });
 

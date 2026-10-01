@@ -77,14 +77,25 @@ const withBranchSnapshot = async (repoRoot, run) => {
       GIT_OBJECT_DIRECTORY: join(directory, 'objects'),
     };
     await fs.mkdir(env.GIT_OBJECT_DIRECTORY);
-    for (const source of sourceObjects) {
-      await fs.cp(source, env.GIT_OBJECT_DIRECTORY, {
-        dereference: true,
-        filter: (path) => path !== join(source, 'info/alternates'),
-        force: false,
-        mode: constants.COPYFILE_FICLONE,
-        recursive: true,
-      });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        for (const source of sourceObjects) {
+          await fs.cp(source, env.GIT_OBJECT_DIRECTORY, {
+            dereference: true,
+            filter: (path) => path !== join(source, 'info/alternates'),
+            force: false,
+            mode: constants.COPYFILE_FICLONE,
+            recursive: true,
+          });
+        }
+        break;
+      } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT' || attempt >= 2) {
+          throw error;
+        }
+        await fs.rm(env.GIT_OBJECT_DIRECTORY, { force: true, recursive: true });
+        await fs.mkdir(env.GIT_OBJECT_DIRECTORY);
+      }
     }
     try {
       const indexStat = await fs.stat(indexPath);
