@@ -1742,6 +1742,35 @@ test.each(['loose', 'packed', 'alternate', 'sparse'])(
   },
 );
 
+test('branch+ reads C-quoted alternate object paths without changing their timestamps', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'file.txt', 'base\n');
+    await commitAll(repo, 'base');
+    const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    await using alternateDirectory = await createTemporaryDirectory('codiff-quoted-alternate-');
+    const alternate = join(alternateDirectory.path, 'objects-\u0007\v\u001b\t-\\a-"-雪');
+    await rename(join(repo, '.git/objects'), alternate);
+    await mkdir(join(repo, '.git/objects/info'), { recursive: true });
+    await writeFile(join(repo, '.git/objects/info/alternates'), `${alternate}\n`);
+    const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
+    const objectPath = join(alternate, object.slice(0, 2), object.slice(2));
+    const before = await stat(objectPath, { bigint: true });
+    await writeRepoFile(repo, 'file.txt', 'working\n');
+    const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+    const loaded = await readDiffSectionContent(repo, {
+      force: true,
+      kind: 'combined',
+      path: 'file.txt',
+      source: state.source,
+    });
+    expect(loaded.oldFile?.contents).toBe('base\n');
+    expect(loaded.newFile?.contents).toBe('working\n');
+    const after = await stat(objectPath, { bigint: true });
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.ctimeNs).toBe(before.ctimeNs);
+  });
+});
+
 test('branch+ preserves index-only attribute fallbacks', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, '.gitattributes', '*.txt text eol=lf\n');

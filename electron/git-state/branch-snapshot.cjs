@@ -6,6 +6,29 @@ const { join, resolve } = require('node:path');
 const { git, gitBufferWithInput, parseStatus } = require('./common.cjs');
 const { listUntrackedItems } = require('./working-tree.cjs');
 
+const pathEscapes = new Map([
+  ['\\a', '\x07'],
+  ['\\b', '\b'],
+  ['\\f', '\f'],
+  ['\\n', '\n'],
+  ['\\r', '\r'],
+  ['\\t', '\t'],
+  ['\\v', '\v'],
+  ['\\"', '"'],
+  ['\\\\', '\\'],
+]);
+
+/** @param {string} path */
+const unquoteAlternatePath = (path) =>
+  path.startsWith('"')
+    ? path
+        .slice(1, -1)
+        .replace(
+          /\\(?:[0-7]{3}|[abfnrtv"\\])/g,
+          (escape) => pathEscapes.get(escape) || String.fromCharCode(parseInt(escape.slice(1), 8)),
+        )
+    : path;
+
 /**
  * @typedef {import('./common.cjs').StatusItem} StatusItem
  * @typedef {{
@@ -39,7 +62,7 @@ const withBranchSnapshot = async (repoRoot, run) => {
           .split('\n')
           .filter((line) => line.startsWith('alternate: '))
           .map((line) => line.slice('alternate: '.length))
-          .map((path) => (path.startsWith('"') ? JSON.parse(path) : path)),
+          .map(unquoteAlternatePath),
       ]),
     ];
     const env = {
