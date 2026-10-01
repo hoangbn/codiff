@@ -171,6 +171,12 @@ const observableFiles = (comparison: RepositoryState) =>
     status: file.status,
   }));
 const require = createRequire(import.meta.url);
+const { withBranchSnapshot } = require('../../electron/git-state/branch-snapshot.cjs') as {
+  withBranchSnapshot: (
+    repo: string,
+    run: (snapshot: { env: NodeJS.ProcessEnv; tree: string }) => Promise<void>,
+  ) => Promise<void>;
+};
 const { readGeneratedAttributeStates } =
   require('../../electron/generated-files.cjs') as GeneratedFilesModule;
 const {
@@ -1735,6 +1741,67 @@ test.each(['loose', 'packed', 'alternate', 'sparse'])(
     });
   },
 );
+
+test('branch+ preserves index-only attribute fallbacks', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, '.gitattributes', '*.txt text eol=lf\n');
+    await writeRepoFile(repo, 'file.txt', 'base\r\n');
+    await writeRepoFile(repo, 'unchanged.bin', 'unchanged binary object\n');
+    await commitAll(repo, 'base');
+    const unchangedObject = (await git(repo, ['rev-parse', 'HEAD:unchanged.bin'])).trim();
+    await git(repo, ['update-index', '--skip-worktree', '.gitattributes']);
+    await rm(join(repo, '.gitattributes'));
+    await writeRepoFile(repo, 'file.txt', 'working\r\n');
+    await withBranchSnapshot(repo, async ({ env, tree }) => {
+      const writeEnv = { ...env, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined };
+      const { stdout: working } = await execFileAsync(
+        'git',
+        ['-C', repo, 'show', `${tree}:file.txt`],
+        {
+          encoding: 'utf8',
+          env: writeEnv,
+        },
+      );
+      expect(working).toBe('working\n');
+      const { stdout: unchanged } = await execFileAsync(
+        'git',
+        ['-C', repo, 'cat-file', '-p', unchangedObject],
+        { encoding: 'utf8', env },
+      );
+      expect(unchanged).toBe('unchanged binary object\n');
+    });
+  });
+});
+
+test('branch+ does not materialize unavailable unchanged sparse blobs', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'included/file.txt', 'base\n');
+    await writeRepoFile(repo, 'excluded/file.txt', 'unavailable\n');
+    await commitAll(repo, 'base');
+    const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    const excludedObject = (await git(repo, ['rev-parse', 'HEAD:excluded/file.txt'])).trim();
+    await git(repo, ['sparse-checkout', 'set', '--cone', 'included']);
+    const excludedPath = join(
+      repo,
+      '.git/objects',
+      excludedObject.slice(0, 2),
+      excludedObject.slice(2),
+    );
+    await rm(excludedPath);
+    await writeRepoFile(repo, 'included/file.txt', 'working\n');
+    const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+    expect(state.files.map((file) => file.path)).toEqual(['included/file.txt']);
+    const loaded = await readDiffSectionContent(repo, {
+      force: true,
+      kind: 'combined',
+      path: 'included/file.txt',
+      source: state.source,
+    });
+    expect(loaded.oldFile?.contents).toBe('base\n');
+    expect(loaded.newFile?.contents).toBe('working\n');
+    await expect(stat(excludedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
 
 test('branch+ matches staging and committing all changes without changing the repository', async () => {
   await withRepo(async (repo) => {

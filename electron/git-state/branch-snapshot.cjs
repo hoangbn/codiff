@@ -1,8 +1,8 @@
 // @ts-check
 
-const { promises: fs } = require('node:fs');
+const { constants, promises: fs } = require('node:fs');
 const { tmpdir } = require('node:os');
-const { delimiter, join, resolve } = require('node:path');
+const { join, resolve } = require('node:path');
 const { git, gitBufferWithInput, parseStatus } = require('./common.cjs');
 const { listUntrackedItems } = require('./working-tree.cjs');
 
@@ -32,14 +32,19 @@ const withBranchSnapshot = async (repoRoot, run) => {
       .split('\n')
       .map((path) => resolve(repoRoot, path));
     const configCount = Number(process.env.GIT_CONFIG_COUNT || 0);
+    const sourceObjects = [
+      ...new Set([
+        objectsPath,
+        ...(await git(repoRoot, ['-c', 'core.quotePath=false', 'count-objects', '-v']))
+          .split('\n')
+          .filter((line) => line.startsWith('alternate: '))
+          .map((line) => line.slice('alternate: '.length))
+          .map((path) => (path.startsWith('"') ? JSON.parse(path) : path)),
+      ]),
+    ];
     const env = {
       ...process.env,
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: [
-        JSON.stringify(objectsPath),
-        process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
-      ]
-        .filter(Boolean)
-        .join(delimiter),
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
       GIT_CONFIG_COUNT: String(configCount + 2),
       [`GIT_CONFIG_KEY_${configCount}`]: 'lfs.storage',
       [`GIT_CONFIG_VALUE_${configCount}`]: join(directory, 'lfs'),
@@ -49,6 +54,15 @@ const withBranchSnapshot = async (repoRoot, run) => {
       GIT_OBJECT_DIRECTORY: join(directory, 'objects'),
     };
     await fs.mkdir(env.GIT_OBJECT_DIRECTORY);
+    for (const source of sourceObjects) {
+      await fs.cp(source, env.GIT_OBJECT_DIRECTORY, {
+        dereference: true,
+        filter: (path) => path !== join(source, 'info/alternates'),
+        force: false,
+        mode: constants.COPYFILE_FICLONE,
+        recursive: true,
+      });
+    }
     try {
       const indexStat = await fs.stat(indexPath);
       await fs.copyFile(indexPath, env.GIT_INDEX_FILE);
@@ -58,29 +72,6 @@ const withBranchSnapshot = async (repoRoot, run) => {
         throw error;
       }
     }
-
-    const indexEntries = (await git(repoRoot, ['ls-files', '--stage', '--sparse', '-z'], { env }))
-      .split('\0')
-      .filter(Boolean);
-    const indexObjects = [
-      ...new Set(
-        indexEntries.flatMap((entry) => {
-          const [mode, object] = entry.slice(0, entry.indexOf('\t')).split(' ');
-          return mode === '160000' || /^0+$/.test(object) ? [] : [object];
-        }),
-      ),
-    ];
-    if (indexObjects.length) {
-      const packDirectory = join(env.GIT_OBJECT_DIRECTORY, 'pack');
-      await fs.mkdir(packDirectory);
-      await gitBufferWithInput(
-        repoRoot,
-        ['pack-objects', '--revs', '--non-empty', join(packDirectory, 'pack')],
-        `${indexObjects.join('\n')}\n`,
-        { env },
-      );
-    }
-    const writeEnv = { ...env, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined };
 
     const [untracked, originalStatus] = await Promise.all([
       listUntrackedItems(repoRoot),
@@ -112,14 +103,14 @@ const withBranchSnapshot = async (repoRoot, run) => {
         ...removedUntracked,
       ]),
     ];
-    await git(repoRoot, ['add', '--update'], { env: writeEnv });
+    await git(repoRoot, ['add', '--update'], { env });
     while (untrackedPaths.length > 0) {
       try {
         await gitBufferWithInput(
           repoRoot,
           ['add', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
           Buffer.from(`${untrackedPaths.map((path) => `:(literal)${path}`).join('\0')}\0`),
-          { env: writeEnv },
+          { env },
         );
         break;
       } catch (error) {
@@ -153,7 +144,7 @@ const withBranchSnapshot = async (repoRoot, run) => {
       }
     }
 
-    const tree = (await git(repoRoot, ['write-tree'], { env: writeEnv })).trim();
+    const tree = (await git(repoRoot, ['write-tree'], { env })).trim();
     return await run({
       conflictedPaths: status
         .filter((item) => item.status === 'conflicted')
