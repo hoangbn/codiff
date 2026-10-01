@@ -1637,7 +1637,7 @@ test('branch+ preserves racy-index checks for same-size text and image edits', a
   });
 });
 
-test.each(['loose', 'packed', 'alternate'])(
+test.each(['loose', 'packed', 'alternate', 'sparse'])(
   'branch+ preserves original %s object bytes and timestamps across reads',
   async (storage) => {
     await withRepo(async (originalRepo) => {
@@ -1652,12 +1652,17 @@ test.each(['loose', 'packed', 'alternate'])(
       await writeRepoFile(originalRepo, 'file.txt', 'base\n');
       await writeRepoFile(originalRepo, 'pixel.png', originalImage);
       await writeRepoFile(originalRepo, 'stored.png', changedImage);
+      await writeRepoFile(originalRepo, 'included/file.txt', 'included\n');
+      await writeRepoFile(originalRepo, 'excluded/nested/file.txt', 'excluded\n');
       await commitAll(originalRepo, 'base');
       const base = (await git(originalRepo, ['rev-parse', 'HEAD'])).trim();
       await writeRepoFile(originalRepo, 'file.txt', 'committed\n');
       await commitAll(originalRepo, 'feature');
       if (storage === 'packed') {
         await git(originalRepo, ['repack', '-ad']);
+      }
+      if (storage === 'sparse') {
+        await git(originalRepo, ['sparse-checkout', 'set', '--cone', '--sparse-index', 'included']);
       }
       await using cloneDirectory = await createTemporaryDirectory('codiff-shared-clone-');
       const repo = storage === 'alternate' ? join(cloneDirectory.path, 'checkout') : originalRepo;

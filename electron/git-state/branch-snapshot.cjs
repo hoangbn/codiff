@@ -59,7 +59,7 @@ const withBranchSnapshot = async (repoRoot, run) => {
       }
     }
 
-    const indexEntries = (await git(repoRoot, ['ls-files', '--stage', '-z'], { env }))
+    const indexEntries = (await git(repoRoot, ['ls-files', '--stage', '--sparse', '-z'], { env }))
       .split('\0')
       .filter(Boolean);
     const indexObjects = [
@@ -70,14 +70,16 @@ const withBranchSnapshot = async (repoRoot, run) => {
         }),
       ),
     ];
-    const packDirectory = join(env.GIT_OBJECT_DIRECTORY, 'pack');
-    await fs.mkdir(packDirectory);
-    await gitBufferWithInput(
-      repoRoot,
-      ['pack-objects', '--non-empty', join(packDirectory, 'pack')],
-      indexObjects.length ? `${indexObjects.join('\n')}\n` : '',
-      { env },
-    );
+    if (indexObjects.length) {
+      const packDirectory = join(env.GIT_OBJECT_DIRECTORY, 'pack');
+      await fs.mkdir(packDirectory);
+      await gitBufferWithInput(
+        repoRoot,
+        ['pack-objects', '--revs', '--non-empty', join(packDirectory, 'pack')],
+        `${indexObjects.join('\n')}\n`,
+        { env },
+      );
+    }
     const writeEnv = { ...env, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined };
 
     const [untracked, originalStatus] = await Promise.all([
