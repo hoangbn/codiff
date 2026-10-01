@@ -1,5 +1,8 @@
 # Codiff
 
+Personal fork: the macOS desktop app's **Update Fork** action delegates local
+updates to Codex. See [fork update behavior and requirements](docs/fork-updates.md).
+
 <p align="center">
   <img alt="Codiff icon" src="./web/src/assets/icon.webp" width="76" height="76" />
 </p>

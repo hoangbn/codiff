@@ -40,6 +40,50 @@ const status = (partial: Partial<UpdateStatus>): UpdateStatus => ({
 const pill = (view: { container: HTMLElement }) =>
   view.container.querySelector<HTMLButtonElement>('.update-pill');
 
+test('labels the manual fork action and discloses full local access before launching', async () => {
+  const onApply = () => {
+    applied = true;
+  };
+  let applied = false;
+  await using view = await renderPill(
+    <UpdatePill onApply={onApply} status={status({ phase: 'available', strategy: 'fork' })} />,
+  );
+  expect(pill(view)?.textContent).toBe('Update Fork');
+  expect(pill(view)?.title).toContain('full local access');
+  await act(async () => pill(view)?.click());
+  expect(applied).toBe(true);
+});
+
+test('shows fork progress without allowing another update', async () => {
+  await using view = await renderPill(
+    <UpdatePill
+      onApply={noop}
+      status={status({
+        message: 'Building the rebased fork.',
+        phase: 'updating',
+        strategy: 'fork',
+      })}
+    />,
+  );
+  expect(pill(view)?.textContent).toBe('Updating Fork…');
+  expect(pill(view)?.disabled).toBe(true);
+  expect(pill(view)?.title).toBe('Building the rebased fork.');
+});
+
+test('shows a completed fork result rather than asking the user to install again', async () => {
+  await using view = await renderPill(
+    <UpdatePill
+      onApply={noop}
+      onDismiss={noop}
+      status={status({ message: 'Installed and verified.', phase: 'updated', strategy: 'fork' })}
+    />,
+  );
+  expect(pill(view)?.textContent).toBe('Fork Updated');
+  expect(pill(view)?.disabled).toBe(true);
+  expect(pill(view)?.title).toBe('Installed and verified.');
+  expect(view.container.querySelector('[aria-label="Dismiss update"]')).not.toBeNull();
+});
+
 test('renders nothing while no update is available', async () => {
   await using view = await renderPill(
     <UpdatePill onApply={noop} status={status({ phase: 'idle' })} />,
