@@ -81,20 +81,51 @@ const withBranchSnapshot = async (repoRoot, run) => {
           .split('\0')
           .filter(Boolean)
       : [];
-    const untrackedPaths = [
+    let untrackedPaths = [
       ...new Set([
         ...untracked.filter((item) => !item.directory).map((item) => item.path),
         ...removedUntracked,
       ]),
     ];
     await git(repoRoot, ['add', '--update'], { env });
-    if (untrackedPaths.length > 0) {
-      await gitBufferWithInput(
-        repoRoot,
-        ['add', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
-        Buffer.from(`${untrackedPaths.map((path) => `:(literal)${path}`).join('\0')}\0`),
-        { env },
-      );
+    while (untrackedPaths.length > 0) {
+      try {
+        await gitBufferWithInput(
+          repoRoot,
+          ['add', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
+          Buffer.from(`${untrackedPaths.map((path) => `:(literal)${path}`).join('\0')}\0`),
+          { env },
+        );
+        break;
+      } catch (error) {
+        const exitCode = /** @type {Error & {exitCode?: number}} */ (error).exitCode;
+        if (exitCode === 1) {
+          break;
+        }
+        if (exitCode !== 128) {
+          throw error;
+        }
+        const remainingPaths = (
+          await Promise.all(
+            untrackedPaths.map(async (path) => {
+              try {
+                await fs.lstat(resolve(repoRoot, path));
+                return path;
+              } catch (fileError) {
+                const code = /** @type {NodeJS.ErrnoException} */ (fileError).code;
+                if (code === 'ENOENT' || code === 'ENOTDIR') {
+                  return null;
+                }
+                throw fileError;
+              }
+            }),
+          )
+        ).filter((path) => path !== null);
+        if (remainingPaths.length === untrackedPaths.length) {
+          throw error;
+        }
+        untrackedPaths = remainingPaths;
+      }
     }
 
     const tree = (await git(repoRoot, ['write-tree'], { env })).trim();

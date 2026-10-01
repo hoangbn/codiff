@@ -91,8 +91,9 @@ The `<scope>` segment depends on which diff you anchored against:
   comparison, or a ref range. This is always the **full 40-character SHA of the diff's new (head) side**,
   resolved with `git rev-parse` — never a ref name or a `branch:`/`range:` prefix:
   - single commit (`codiff <commit-ref>`): the resolved commit SHA.
-  - committed-only branch comparison (without local changes): the resolved
-    **`HEAD`** SHA, _not_ `<branch>`.
+  - committed-only in-app branch comparison (`branch-diff` source): the resolved
+    **`HEAD`** SHA, _not_ `<branch>`. `codiff <branch>` always uses the combined
+    scope, even when the working tree is clean.
   - ref range (`codiff base..head` or `base...head`): the resolved SHA of `head`.
 
 ## Schema

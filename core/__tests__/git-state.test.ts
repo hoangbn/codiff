@@ -1598,6 +1598,113 @@ test('branch+ stages from the real index: cached removals, force-added ignored f
   });
 });
 
+test('branch+ initial and lazy patches use literal paths', async () => {
+  await withRepo(async (repo) => {
+    const paths = ['a[1].txt', 'a1.txt', 'star*.txt', 'star1.txt'];
+    for (const path of paths) {
+      await writeRepoFile(repo, path, `base ${path}\n`);
+    }
+    await commitAll(repo, 'base');
+    const target = (await git(repo, ['branch', '--show-current'])).trim();
+    await git(repo, ['checkout', '-b', 'feature']);
+    for (const path of paths) {
+      await writeRepoFile(repo, path, `final ${path}\n`);
+    }
+    const state = await readRepositoryState(repo, { ref: target, type: 'branch-working-tree' });
+    for (const file of state.files) {
+      const expectedPatch = await git(repo, [
+        'diff',
+        '--patch',
+        '--no-ext-diff',
+        '--find-renames',
+        target,
+        '--',
+        `:(literal)${file.path}`,
+      ]);
+      expect(file.sections[0].patch).toBe(expectedPatch);
+      const section = await readDiffSectionContent(repo, {
+        kind: 'combined',
+        path: file.path,
+        source: state.source,
+      });
+      expect(section.patch).toBe(expectedPatch);
+    }
+  });
+});
+
+test
+  .skipIf(process.platform === 'win32' || process.getuid?.() === 0)
+  .each(['unreadable', 'vanished', 'locked'])(
+  'branch+ handles %s untracked staging without losing other changes',
+  async (failure) => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'tracked.txt', 'base\n');
+      await commitAll(repo, 'base');
+      const target = (await git(repo, ['branch', '--show-current'])).trim();
+      await git(repo, ['checkout', '-b', 'feature']);
+      await writeRepoFile(repo, 'tracked.txt', 'final\n');
+      await writeRepoFile(repo, 'valid.txt', 'new\n');
+      await writeRepoFile(repo, 'bad.txt', 'unavailable\n');
+      const index = readFileSync(join(repo, '.git/index'));
+      const refs = await git(repo, ['show-ref']);
+      await using wrapperDirectory = await createTemporaryDirectory('codiff-racing-git-');
+      const wrapperPath = join(wrapperDirectory.path, 'git');
+      await writeFile(
+        wrapperPath,
+        `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process');
+const { readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+const args = process.argv.slice(2);
+if (args.includes('--pathspec-from-file=-') && process.env.CODIFF_TEST_LOCK_UNTRACKED === 'true') {
+  writeFileSync(process.env.GIT_INDEX_FILE + '.lock', 'locked');
+}
+const result = spawnSync('git', args, {
+  env: { ...process.env, PATH: process.env.CODIFF_TEST_ORIGINAL_PATH },
+  input: args.some(argument => argument.startsWith('--batch') || argument === '--pathspec-from-file=-') ? readFileSync(0) : undefined,
+});
+if (args.includes('--others') && process.env.CODIFF_TEST_REMOVE_UNTRACKED === 'true') {
+  rmSync(join(args[args.indexOf('-C') + 1], 'bad.txt'), { force: true });
+}
+if (result.error) throw result.error;
+process.stdout.write(result.stdout);
+process.stderr.write(result.stderr);
+process.exit(result.status ?? 1);
+`,
+      );
+      await chmod(wrapperPath, 0o755);
+      using _environment = createTemporaryEnvironment({
+        CODIFF_TEST_LOCK_UNTRACKED: String(failure === 'locked'),
+        CODIFF_TEST_ORIGINAL_PATH: process.env.PATH ?? '',
+        CODIFF_TEST_REMOVE_UNTRACKED: String(failure === 'vanished'),
+        PATH: `${wrapperDirectory.path}:${process.env.PATH ?? ''}`,
+      });
+      if (failure === 'unreadable') {
+        await chmod(join(repo, 'bad.txt'), 0);
+      }
+      if (failure === 'locked') {
+        await expect(
+          readRepositoryState(repo, { ref: target, type: 'branch-working-tree' }),
+        ).rejects.toThrow('File exists');
+        expect(readFileSync(join(repo, '.git/index'))).toEqual(index);
+        expect(await git(repo, ['show-ref'])).toBe(refs);
+        return;
+      }
+      const state = await readRepositoryState(repo, { ref: target, type: 'branch-working-tree' });
+      expect(state.files.map((file) => file.path)).toEqual(['tracked.txt', 'valid.txt']);
+      expect(state.files[0].sections[0].newFile?.contents).toBe('final\n');
+      const section = await readDiffSectionContent(repo, {
+        kind: 'combined',
+        path: 'valid.txt',
+        source: state.source,
+      });
+      expect(section.newFile?.contents).toBe('new\n');
+      expect(readFileSync(join(repo, '.git/index'))).toEqual(index);
+      expect(await git(repo, ['show-ref'])).toBe(refs);
+    });
+  },
+);
+
 test('branch+ keeps unresolved conflicts visible without resolving the real index', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');

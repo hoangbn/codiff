@@ -112,7 +112,7 @@ const gitBufferWithInput = (repoPath, args, input, options = {}) =>
         const error = new Error(
           Buffer.concat(stderr).toString('utf8') || `git exited with status ${code}`,
         );
-        reject(error);
+        reject(Object.assign(error, { exitCode: code }));
       }
     });
 

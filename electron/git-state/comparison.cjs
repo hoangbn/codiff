@@ -23,6 +23,7 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  *   env?: NodeJS.ProcessEnv;
  *   force?: boolean;
  *   includeRenameSources?: boolean;
+ *   literalPaths?: boolean;
  *   section?: {kind: DiffSection['kind']; ref: string};
  *   showWhitespace?: boolean;
  * }} ComparisonOptions
@@ -34,13 +35,16 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  * @param {ReadonlyArray<Pick<StatusItem, 'oldPath' | 'path'>>} items
  * @param {ComparisonOptions} options
  */
-const getPathspec = (items, options) => [
-  ...new Set(
-    items.flatMap((item) =>
-      options.includeRenameSources && item.oldPath ? [item.oldPath, item.path] : [item.path],
+const getPathspec = (items, options) => {
+  const paths = [
+    ...new Set(
+      items.flatMap((item) =>
+        options.includeRenameSources && item.oldPath ? [item.oldPath, item.path] : [item.path],
+      ),
     ),
-  ),
-];
+  ];
+  return options.literalPaths ? paths.map((path) => `:(literal)${path}`) : paths;
+};
 
 /**
  * @param {string} newRef
