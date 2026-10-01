@@ -78,11 +78,11 @@ const readRepositoryState = async (launchPath, source = { type: 'working-tree' }
           source,
         )
       : source.type === 'commit'
-        ? await readCommitState(launchPath, source.ref)
+        ? await readCommitState(launchPath, source.ref, options)
         : source.type === 'range'
-          ? await readRangeState(launchPath, source.base, source.head, source.symmetric)
+          ? await readRangeState(launchPath, source.base, source.head, source.symmetric, options)
           : source.type === 'branch' || source.type === 'branch-diff'
-            ? await readBranchState(launchPath, source)
+            ? await readBranchState(launchPath, source, options)
             : source.type === 'branch-working-tree'
               ? await readBranchWorkingTreeState(launchPath, source, {
                   showWhitespace: options.showWhitespace,
@@ -135,7 +135,7 @@ const readWalkthroughRepositoryState = async (launchPath, source, options = {}) 
   const [head, branchHead] = status.head.split('\0');
   const branch = branchHead && branchHead !== '(detached)' ? branchHead : null;
   if (/^[0-9a-f]+$/i.test(head)) {
-    const state = await readResolvedCommitState(launchPath, repoRoot, head);
+    const state = await readResolvedCommitState(launchPath, repoRoot, head, options);
     return { ...state, branch };
   }
 
@@ -196,12 +196,13 @@ const readDiffSectionContent = async (launchPath, request) => {
       request.source.head,
       request.source.symmetric,
       request.path,
-      { force: request.force },
+      { force: request.force, showWhitespace: request.showWhitespace },
     );
   }
   if (request.source?.type === 'branch' || request.source?.type === 'branch-diff') {
     return readBranchSectionContent(launchPath, request.source, request.path, {
       force: request.force,
+      showWhitespace: request.showWhitespace,
     });
   }
   if (request.source?.type === 'branch-working-tree') {
@@ -210,6 +211,7 @@ const readDiffSectionContent = async (launchPath, request) => {
   if (request.kind === 'commit' || request.source?.type === 'commit') {
     return readCommitSectionContent(launchPath, request.source?.ref || 'HEAD', request.path, {
       force: request.force,
+      showWhitespace: request.showWhitespace,
     });
   }
   return readWorkingTreeDiffSectionContent(launchPath, request);

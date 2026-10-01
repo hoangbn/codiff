@@ -332,12 +332,13 @@ const readResolvedCommitComparison = async (repoRoot, commit) => {
   };
 };
 
-/** @param {string} launchPath @param {ResolvedComparison} comparison */
-const readResolvedComparisonState = (launchPath, comparison) =>
+/** @param {string} launchPath @param {ResolvedComparison} comparison @param {{showWhitespace?: boolean}} [options] */
+const readResolvedComparisonState = (launchPath, comparison, options = {}) =>
   readComparisonState({
     launchPath,
     newRef: comparison.newRef,
     oldRef: comparison.oldRef,
+    options,
     repoRoot: comparison.repoRoot,
     source: comparison.source,
     status: comparison.status,
@@ -351,11 +352,11 @@ const readComparisonGeneratedAttributeStates = (comparison) =>
     comparison.newRef,
   );
 
-/** @param {string} launchPath @param {ComparisonSource} source @returns {Promise<RepositoryState>} */
-const readComparisonSourceState = async (launchPath, source) => {
+/** @param {string} launchPath @param {ComparisonSource} source @param {{showWhitespace?: boolean}} [options] @returns {Promise<RepositoryState>} */
+const readComparisonSourceState = async (launchPath, source, options = {}) => {
   const comparison = await readResolvedComparison(launchPath, source);
   const [state, generatedAttributeStates] = await Promise.all([
-    readResolvedComparisonState(launchPath, comparison),
+    readResolvedComparisonState(launchPath, comparison, options),
     readComparisonGeneratedAttributeStates(comparison),
   ]);
   return applyGeneratedAttributeStates(state, generatedAttributeStates);
@@ -365,7 +366,7 @@ const readComparisonSourceState = async (launchPath, source) => {
  * @param {string} launchPath
  * @param {ComparisonSource} source
  * @param {string} requestedPath
- * @param {{force?: boolean}} [options]
+ * @param {{force?: boolean; showWhitespace?: boolean}} [options]
  */
 const readComparisonSourceSectionContent = async (
   launchPath,
@@ -410,8 +411,8 @@ const readComparisonSourceImageContent = async (launchPath, source, requestedPat
   }
 };
 
-/** @param {string} launchPath @param {ResolvedComparison} comparison */
-const readCommitStateFromComparison = async (launchPath, comparison) => {
+/** @param {string} launchPath @param {ResolvedComparison} comparison @param {{showWhitespace?: boolean}} [options] */
+const readCommitStateFromComparison = async (launchPath, comparison, options = {}) => {
   const [commitMetadata, state, generatedAttributeStates] = await Promise.all([
     readCommitMetadataForCommit(
       comparison.repoRoot,
@@ -419,7 +420,7 @@ const readCommitStateFromComparison = async (launchPath, comparison) => {
       comparison.oldRef,
       comparison.status,
     ),
-    readResolvedComparisonState(launchPath, comparison),
+    readResolvedComparisonState(launchPath, comparison, options),
     readComparisonGeneratedAttributeStates(comparison),
   ]);
 
@@ -429,27 +430,33 @@ const readCommitStateFromComparison = async (launchPath, comparison) => {
   };
 };
 
-/** @param {string} launchPath @param {string} ref @returns {Promise<RepositoryState>} */
-const readCommitState = async (launchPath, ref) =>
+/** @param {string} launchPath @param {string} ref @param {{showWhitespace?: boolean}} [options] @returns {Promise<RepositoryState>} */
+const readCommitState = async (launchPath, ref, options = {}) =>
   readCommitStateFromComparison(
     launchPath,
     await readResolvedComparison(launchPath, { ref, type: 'commit' }),
+    options,
   );
 
 /**
  * @param {string} launchPath
  * @param {string} repoRoot
  * @param {string} commit
+ * @param {{showWhitespace?: boolean}} [options]
  * @returns {Promise<RepositoryState>}
  */
-const readResolvedCommitState = async (launchPath, repoRoot, commit) =>
-  readCommitStateFromComparison(launchPath, await readResolvedCommitComparison(repoRoot, commit));
+const readResolvedCommitState = async (launchPath, repoRoot, commit, options = {}) =>
+  readCommitStateFromComparison(
+    launchPath,
+    await readResolvedCommitComparison(repoRoot, commit),
+    options,
+  );
 
 /**
  * @param {string} launchPath
  * @param {string} ref
  * @param {string} requestedPath
- * @param {{force?: boolean}} [options]
+ * @param {{force?: boolean; showWhitespace?: boolean}} [options]
  */
 const readCommitSectionContent = (launchPath, ref, requestedPath, options = {}) =>
   readComparisonSourceSectionContent(launchPath, { ref, type: 'commit' }, requestedPath, options);
@@ -465,18 +472,23 @@ const readCommitImageContent = (launchPath, ref, requestedPath) =>
 
 /**
  * @param {string} launchPath @param {string} base @param {string} head @param {boolean} symmetric
+ * @param {{showWhitespace?: boolean}} [options]
  * @returns {Promise<RepositoryState>}
  */
-const readRangeState = (launchPath, base, head, symmetric) =>
-  readComparisonSourceState(launchPath, {
-    base,
-    head,
-    symmetric,
-    type: 'range',
-  });
+const readRangeState = (launchPath, base, head, symmetric, options = {}) =>
+  readComparisonSourceState(
+    launchPath,
+    {
+      base,
+      head,
+      symmetric,
+      type: 'range',
+    },
+    options,
+  );
 
 /**
- * @param {string} launchPath @param {string} base @param {string} head @param {boolean} symmetric @param {string} requestedPath @param {{encoding?: BufferEncoding, force?: boolean}} [options]
+ * @param {string} launchPath @param {string} base @param {string} head @param {boolean} symmetric @param {string} requestedPath @param {{encoding?: BufferEncoding, force?: boolean; showWhitespace?: boolean}} [options]
  */
 const readRangeSectionContent = (launchPath, base, head, symmetric, requestedPath, options = {}) =>
   readComparisonSourceSectionContent(
@@ -507,15 +519,15 @@ const readRangeImageContent = (launchPath, base, head, symmetric, requestedPath)
     requestedPath,
   );
 
-/** @param {string} launchPath @param {string | BranchSource | BranchDiffSource} input @returns {Promise<RepositoryState>} */
-const readBranchState = (launchPath, input) =>
-  readComparisonSourceState(launchPath, normalizeBranchSourceInput(input));
+/** @param {string} launchPath @param {string | BranchSource | BranchDiffSource} input @param {{showWhitespace?: boolean}} [options] @returns {Promise<RepositoryState>} */
+const readBranchState = (launchPath, input, options = {}) =>
+  readComparisonSourceState(launchPath, normalizeBranchSourceInput(input), options);
 
 /**
  * @param {string} launchPath
  * @param {string | BranchSource | BranchDiffSource} input
  * @param {string} requestedPath
- * @param {{force?: boolean}} [options]
+ * @param {{force?: boolean; showWhitespace?: boolean}} [options]
  */
 const readBranchSectionContent = (launchPath, input, requestedPath, options = {}) =>
   readComparisonSourceSectionContent(

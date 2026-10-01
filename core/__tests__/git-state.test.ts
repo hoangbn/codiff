@@ -1413,6 +1413,60 @@ test('committed comparisons preserve both endpoints in rename patches', async ()
   });
 });
 
+test.each([false, true])(
+  'committed comparisons honor showWhitespace=%s like branch+',
+  async (showWhitespace) => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'whitespace.txt', 'const amount = 1;\n');
+      await writeRepoFile(repo, 'meaningful.txt', 'const value = 1;\n');
+      await commitAll(repo, 'base');
+      const target = (await git(repo, ['branch', '--show-current'])).trim();
+      const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+      await git(repo, ['checkout', '-b', 'feature']);
+      await writeRepoFile(repo, 'whitespace.txt', 'const amount  =  1;\n');
+      await writeRepoFile(repo, 'meaningful.txt', 'const value  =  2;\n');
+      const combined = await readRepositoryState(
+        repo,
+        { ref: target, type: 'branch-working-tree' },
+        { showWhitespace },
+      );
+      const expected = new Map(combined.files.map((file) => [file.path, file.sections[0]]));
+      expect(expected.get('whitespace.txt')?.patch.includes('@@')).toBe(showWhitespace);
+      expect(expected.get('meaningful.txt')?.patch).toContain('@@');
+      await commitAll(repo, 'final changes');
+      const head = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+      const sources: ReadonlyArray<ReviewSource> = [
+        { ref: head, type: 'commit' },
+        { base, head, symmetric: false, type: 'range' },
+        { ref: target, type: 'branch' },
+        { baseRef: base, headRef: head, ref: target, type: 'branch-diff' },
+      ];
+      for (const source of [...sources, undefined]) {
+        const state = source
+          ? await readRepositoryState(repo, source, { showWhitespace })
+          : await readWalkthroughRepositoryState(repo, undefined, { showWhitespace });
+        expect(state.files.map((file) => file.path)).toEqual(
+          combined.files.map((file) => file.path),
+        );
+        for (const file of state.files) {
+          const section = expected.get(file.path)!;
+          expect(file.sections[0].patch).toBe(section.patch);
+          const loaded = await readDiffSectionContent(repo, {
+            force: true,
+            kind: 'commit',
+            path: file.path,
+            showWhitespace,
+            source: state.source,
+          });
+          expect(loaded.patch).toBe(section.patch);
+          expect(loaded.oldFile?.contents).toBe(section.oldFile?.contents);
+          expect(loaded.newFile?.contents).toBe(section.newFile?.contents);
+        }
+      }
+    });
+  },
+);
+
 test('readRepositoryState opens branch refs as current branch diffs against the target branch', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');
