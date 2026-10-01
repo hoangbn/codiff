@@ -57,7 +57,7 @@ const {
 } = require('./config.cjs');
 const { readReviewAssistantReply } = require('./review-assist.cjs');
 const { createForkUpdater } = require('./fork-updater.cjs');
-const { updateForkFromMenu } = require('./main/fork-update.cjs');
+const { showForkUpdateFailure, updateForkFromMenu } = require('./main/fork-update.cjs');
 const { parseReviewUrl, resolveReviewUrl } = require('./review-source.cjs');
 const {
   getPlanWindowTitle,
@@ -1209,10 +1209,15 @@ let updater = null;
 
 /** @param {import('../core/types.ts').CodiffUpdateStatus} status */
 const sendUpdateStatusChanged = (status) => {
+  let hasWindow = false;
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      hasWindow = true;
       window.webContents.send('codiff:updateStatusChanged', status);
     }
+  }
+  if (!hasWindow && status.phase === 'error') {
+    void showForkUpdateFailure(status.message ?? 'Unknown update error.', dialog);
   }
 };
 

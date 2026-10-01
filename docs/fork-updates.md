@@ -33,6 +33,9 @@ Reconnection checks the saved process start time as well as its PID so an
 unrelated process reusing that PID does not leave the updater stuck running.
 Completed and failed task results are retained across app relaunches. The app
 menu also displays immediate launch failures when no review window is open.
+Dismissal clears the saved terminal notification. A detached supervisor records
+Codex's exit code; reconnection requires a successful exit as well as a valid
+result before reporting success.
 
 Task instructions, JSON event logs and the final structured result live under
 `fork-updates/run-*` in Electron's user-data directory (normally

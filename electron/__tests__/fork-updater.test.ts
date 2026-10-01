@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vite-plus/test';
@@ -216,6 +216,31 @@ test.each(['updated', 'up-to-date', 'blocked'])(
       currentVersion: '1.15.0',
     });
     expect(commands.calls).toHaveLength(1);
+    relaunched.dismissUpdate();
+    expect(createForkUpdater(options).getStatus().phase).toBe('available');
+  },
+);
+
+test.each([undefined, 1])(
+  'rejects a saved success result without a verified successful exit: %s',
+  async (exitCode) => {
+    await using directory = await createTemporaryDirectory('codiff-fork-update-');
+    const { commands, options } = launchOptions(directory.path);
+    const workspace = join(directory.path, 'run-exited');
+    await mkdir(workspace);
+    await writeFile(
+      join(directory.path, 'active.json'),
+      JSON.stringify({ pid: process.pid, processStartedAt: 'earlier-start', workspace }),
+    );
+    await writeFile(
+      join(workspace, 'result.json'),
+      JSON.stringify({ outcome: 'updated', summary: 'Not verified.' }),
+    );
+    if (exitCode !== undefined) {
+      await writeFile(join(workspace, 'exit.json'), JSON.stringify({ code: exitCode }));
+    }
+    expect(createForkUpdater(options).getStatus().phase).toBe('error');
+    expect(commands.calls).toHaveLength(0);
   },
 );
 
@@ -234,29 +259,33 @@ test('an interrupted job without a valid result reports recovery uncertainty aft
   expect(commands.calls).toHaveLength(0);
 });
 
-test('a detached task finishes and retains its log after the launcher exits', async () => {
-  vi.useRealTimers();
-  await using directory = await createTemporaryDirectory('codiff-fork-update-');
-  const workerPath = join(directory.path, 'fake-codex.cjs');
-  await writeFile(
-    workerPath,
-    `
+test.each([0, 1])(
+  'a detached task retains its result, log and exit code %s after the launcher exits',
+  async (exitCode) => {
+    vi.useRealTimers();
+    await using directory = await createTemporaryDirectory('codiff-fork-update-');
+    const workerPath = join(directory.path, 'fake-codex.cjs');
+    await writeFile(
+      workerPath,
+      `#!/usr/bin/env node
     const { writeFileSync } = require('node:fs');
     process.stdin.resume();
     process.stdin.on('end', () => setTimeout(() => {
       const resultPath = process.argv[process.argv.indexOf('--output-last-message') + 1];
       writeFileSync(resultPath, JSON.stringify({ outcome: 'up-to-date', summary: 'Fixture finished after launcher exit.' }));
       console.log('Fixture log survived launcher exit.');
+      process.exitCode = ${exitCode};
     }, 100));
   `,
-  );
-  const { commands, options } = launchOptions(directory.path);
-  const modulePath = require.resolve('../fork-updater.cjs');
-  execFileSync(
-    process.execPath,
-    [
-      '-e',
-      `
+    );
+    await chmod(workerPath, 0o700);
+    const { commands, options } = launchOptions(directory.path);
+    const modulePath = require.resolve('../fork-updater.cjs');
+    execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `
     const { createForkUpdater } = require(${JSON.stringify(modulePath)});
     const { spawn } = require('node:child_process');
     const updater = createForkUpdater({
@@ -268,28 +297,37 @@ test('a detached task finishes and retains its log after the launcher exits', as
       updateDirectory: ${JSON.stringify(directory.path)},
       getEnvironment: async () => process.env,
       commandTransport: {
-        command: process.execPath,
-        spawn: (command, args, settings) => spawn(command, [${JSON.stringify(workerPath)}, ...args], settings),
+        command: ${JSON.stringify(workerPath)},
+        spawn,
       },
     });
     updater.applyUpdate().then(status => process.exit(status.phase === 'updating' ? 0 : 1));
   `,
-    ],
-    { timeout: 5000 },
-  );
-  const updater = createForkUpdater({ ...options, getProcessStartTime: undefined });
-  await vi.waitFor(() => expect(updater.getStatus().phase).toBe('updated'), { timeout: 5000 });
-  expect(updater.getStatus().message).toBe('Fixture finished after launcher exit.');
-  const activeRuns = await readdir(directory.path);
-  const workspace = join(
-    directory.path,
-    activeRuns.find((name) => name.startsWith('run-'))!,
-  );
-  expect(await readFile(join(workspace, 'codex.log'), 'utf8')).toContain(
-    'Fixture log survived launcher exit.',
-  );
-  expect(commands.calls).toHaveLength(0);
-});
+      ],
+      { timeout: 5000 },
+    );
+    const updater = createForkUpdater({ ...options, getProcessStartTime: undefined });
+    await vi.waitFor(
+      () => expect(updater.getStatus().phase).toBe(exitCode === 0 ? 'updated' : 'error'),
+      { timeout: 5000 },
+    );
+    expect(updater.getStatus().message).toEqual(
+      exitCode === 0 ? 'Fixture finished after launcher exit.' : expect.stringContaining('code 1'),
+    );
+    const activeRuns = await readdir(directory.path);
+    const workspace = join(
+      directory.path,
+      activeRuns.find((name) => name.startsWith('run-'))!,
+    );
+    expect(await readFile(join(workspace, 'codex.log'), 'utf8')).toContain(
+      'Fixture log survived launcher exit.',
+    );
+    expect(commands.calls).toHaveLength(0);
+    expect(JSON.parse(await readFile(join(workspace, 'exit.json'), 'utf8'))).toEqual({
+      code: exitCode,
+    });
+  },
+);
 
 test('a successful exit without a structured result is not treated as a successful update', async () => {
   await using directory = await createTemporaryDirectory('codiff-fork-update-');
@@ -299,6 +337,42 @@ test('a successful exit without a structured result is not treated as a successf
   commands.calls[0].close();
   expect(updater.getStatus().phase).toBe('error');
   expect(updater.getStatus().message).toContain('codex.log');
+});
+
+test('stopping the detached supervisor waits for its worker and records a failed exit', async () => {
+  vi.useRealTimers();
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const completionPath = join(directory.path, 'exit.json');
+  const supervisor = spawn('/bin/sh', [
+    join(import.meta.dirname, '../fork-update-runner.sh'),
+    completionPath,
+    process.execPath,
+    '-e',
+    `process.on('SIGTERM', () => setTimeout(() => {
+      console.log('worker stopped');
+      process.exit(17);
+    }, 50));
+    console.log('worker started');
+    setInterval(() => {}, 1000);`,
+  ]);
+  const closed = new Promise<number | null>((resolve, reject) => {
+    supervisor.on('close', resolve);
+    supervisor.on('error', reject);
+  });
+  let output = '';
+  let stopping = false;
+  supervisor.stdout.on('data', (chunk) => {
+    output += chunk.toString();
+    if (!stopping && output.includes('worker started')) {
+      stopping = true;
+      supervisor.kill();
+    }
+  });
+  supervisor.stdin.end();
+  const code = await closed;
+  expect(code).not.toBe(0);
+  expect(output).toContain('worker stopped');
+  expect(JSON.parse(await readFile(completionPath, 'utf8'))).toEqual({ code });
 });
 
 test('a relaunched app reconnects to a running task instead of launching another', async () => {

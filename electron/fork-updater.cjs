@@ -135,8 +135,8 @@ const createForkUpdater = ({
     return { ...status };
   };
 
-  /** @param {string} [failure] */
-  const finish = (failure) => {
+  /** @param {string} [failure] @param {boolean} [verifyExit] */
+  const finish = (failure, verifyExit = false) => {
     if (!active) {
       return;
     }
@@ -147,6 +147,15 @@ const createForkUpdater = ({
     try {
       if (failure) {
         throw new Error(failure);
+      }
+      if (verifyExit) {
+        const exit = JSON.parse(readFileSync(join(workspace, 'exit.json'), 'utf8'));
+        if (!Number.isInteger(exit.code) || exit.code < 0 || exit.code > 255) {
+          throw new Error('Codex did not record a valid exit status.');
+        }
+        if (exit.code !== 0) {
+          throw new Error(`Codex exited with code ${exit.code}.`);
+        }
       }
       const result = JSON.parse(readFileSync(join(workspace, 'result.json'), 'utf8'));
       if (
@@ -181,7 +190,7 @@ const createForkUpdater = ({
     if (!ownsProcess) {
       try {
         if (getProcessStartTime(active.pid) !== active.processStartedAt) {
-          finish();
+          finish(undefined, true);
           return;
         }
       } catch {
@@ -262,8 +271,11 @@ const createForkUpdater = ({
       let child;
       try {
         child = transport.spawn(
-          transport.command,
+          '/bin/sh',
           [
+            join(__dirname, 'fork-update-runner.sh'),
+            join(workspace, 'exit.json'),
+            transport.command,
             'exec',
             '--cd',
             workspace,
@@ -336,8 +348,20 @@ const createForkUpdater = ({
   return {
     applyLatest: applyUpdate,
     applyUpdate,
-    dismissUpdate: () =>
-      active || status.phase === 'updating' ? { ...status } : setStatus('idle'),
+    dismissUpdate: () => {
+      if (active || status.phase === 'updating') {
+        return { ...status };
+      }
+      try {
+        rmSync(statusPath, { force: true });
+        return setStatus('idle');
+      } catch (error) {
+        return setStatus(
+          'error',
+          `Could not dismiss the update status: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
     getStatus: () => ({ ...status }),
   };
 };
