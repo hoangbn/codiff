@@ -1218,6 +1218,19 @@ const sendUpdateStatusChanged = (status) => {
 const initUpdater = () => {
   updater = createForkUpdater({
     appPath: dirname(dirname(dirname(process.execPath))),
+    confirmUpdate: async () => {
+      const { response } = await dialog.showMessageBox({
+        buttons: ['Cancel', 'Update Fork'],
+        cancelId: 0,
+        defaultId: 0,
+        detail:
+          'Codex will run with unrestricted filesystem and network access, without interactive approvals. It can edit files, run commands, replace this app and restart it. Preservation and rollback instructions are not a security sandbox.',
+        message: 'Allow Codex to update and reinstall this fork?',
+        noLink: true,
+        type: 'warning',
+      });
+      return response === 1;
+    },
     currentVersion: app.getVersion(),
     getModel: () => config.settings.openAIModel,
     isPackaged: app.isPackaged,

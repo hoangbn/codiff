@@ -13,9 +13,11 @@ const { createForkUpdater } = require('../fork-updater.cjs') as {
   createForkUpdater: (options: {
     appPath: string;
     commandTransport: CommandTransport;
+    confirmUpdate: () => Promise<boolean>;
     currentVersion: string;
     getEnvironment: () => Promise<Record<string, string>>;
     getModel?: () => string;
+    getProcessStartTime?: (pid: number) => string | null;
     isPackaged: boolean;
     onStatusChange?: (status: CodiffUpdateStatus) => void;
     platform: string;
@@ -37,8 +39,10 @@ const launchOptions = (updateDirectory: string) => {
     options: {
       appPath: '/Applications/Personal Codiff.app',
       commandTransport: commands.transport,
+      confirmUpdate: async () => true,
       currentVersion: '1.14.0',
       getEnvironment: async () => ({ PATH: '/test/bin' }),
+      getProcessStartTime: () => 'fixture-start',
       isPackaged: true,
       platform: 'darwin',
       updateDirectory,
@@ -57,6 +61,40 @@ test('offers a dismissible manual fork action without starting a task', async ()
   expect(commands.calls).toHaveLength(0);
   expect(updater.dismissUpdate().phase).toBe('idle');
   expect(updater.getStatus().phase).toBe('idle');
+});
+
+test('cancelling the full-access confirmation never starts Codex or creates a workspace', async () => {
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const { commands, options } = launchOptions(directory.path);
+  const confirmUpdate = vi.fn(async () => false);
+  const getEnvironment = vi.fn(options.getEnvironment);
+  const updater = createForkUpdater({ ...options, confirmUpdate, getEnvironment });
+  expect((await updater.applyUpdate()).phase).toBe('available');
+  expect(confirmUpdate).toHaveBeenCalledOnce();
+  expect(getEnvironment).not.toHaveBeenCalled();
+  expect(commands.calls).toHaveLength(0);
+  expect(await readdir(directory.path)).toEqual([]);
+});
+
+test('concurrent update entry points share one confirmation before starting Codex', async () => {
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const { commands, options } = launchOptions(directory.path);
+  let approve!: (value: boolean) => void;
+  const confirmUpdate = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        approve = resolve;
+      }),
+  );
+  const updater = createForkUpdater({ ...options, confirmUpdate });
+  const pending = updater.applyUpdate();
+  expect((await updater.applyLatest()).phase).toBe('updating');
+  expect(confirmUpdate).toHaveBeenCalledOnce();
+  expect(commands.calls).toHaveLength(0);
+  approve(true);
+  expect((await pending).phase).toBe('updating');
+  expect(commands.calls).toHaveLength(1);
+  commands.calls[0].close(1);
 });
 
 test('launches one detached Codex task in an isolated workspace with durable output and the selected model', async () => {
@@ -93,6 +131,7 @@ test('launches one detached Codex task in an isolated workspace with durable out
   expect(await readFile(join(workspace, 'task.txt'), 'utf8')).toBe(prompt);
   expect(await readFile(join(workspace, 'codex.log'), 'utf8')).toBe('');
   expect(JSON.parse(await readFile(join(directory.path, 'active.json'), 'utf8'))).toMatchObject({
+    processStartedAt: 'fixture-start',
     workspace,
   });
   expect(updater.dismissUpdate().phase).toBe('updating');
@@ -165,7 +204,7 @@ test('an interrupted job without a valid result reports recovery uncertainty aft
   await mkdir(workspace);
   await writeFile(
     join(directory.path, 'active.json'),
-    JSON.stringify({ pid: 2147483647, workspace }),
+    JSON.stringify({ pid: 2147483647, processStartedAt: 'earlier-start', workspace }),
   );
   const updater = createForkUpdater(options);
   expect(updater.getStatus().phase).toBe('error');
@@ -200,6 +239,7 @@ test('a detached task finishes and retains its log after the launcher exits', as
     const { spawn } = require('node:child_process');
     const updater = createForkUpdater({
       appPath: ${JSON.stringify(options.appPath)},
+      confirmUpdate: async () => true,
       currentVersion: '1.14.0',
       isPackaged: true,
       platform: 'darwin',
@@ -215,7 +255,7 @@ test('a detached task finishes and retains its log after the launcher exits', as
     ],
     { timeout: 5000 },
   );
-  const updater = createForkUpdater(options);
+  const updater = createForkUpdater({ ...options, getProcessStartTime: undefined });
   await vi.waitFor(() => expect(updater.getStatus().phase).toBe('updated'), { timeout: 5000 });
   expect(updater.getStatus().message).toBe('Fixture finished after launcher exit.');
   const activeRuns = await readdir(directory.path);
@@ -247,10 +287,65 @@ test('a relaunched app reconnects to a running task instead of launching another
   await writeFile(join(workspace, 'codex.log'), '');
   await writeFile(
     join(directory.path, 'active.json'),
-    JSON.stringify({ pid: process.pid, workspace }),
+    JSON.stringify({ pid: process.pid, processStartedAt: 'fixture-start', workspace }),
   );
   const updater = createForkUpdater(options);
   expect((await updater.applyUpdate()).phase).toBe('updating');
+  expect(commands.calls).toHaveLength(0);
+});
+
+test('a reused PID does not keep an interrupted saved update running', async () => {
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const { commands, options } = launchOptions(directory.path);
+  const workspace = join(directory.path, 'run-reused-pid');
+  await mkdir(workspace);
+  await writeFile(
+    join(directory.path, 'active.json'),
+    JSON.stringify({ pid: process.pid, processStartedAt: 'earlier-start', workspace }),
+  );
+  const updater = createForkUpdater(options);
+  expect(updater.getStatus().phase).toBe('error');
+  expect(updater.getStatus().message).toContain(join(workspace, 'codex.log'));
+  expect((await updater.applyUpdate()).phase).toBe('updating');
+  expect(commands.calls).toHaveLength(1);
+  commands.calls[0].close(1);
+});
+
+test('reconnection notices a saved process ending even when its PID remains live', async () => {
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const { commands, options } = launchOptions(directory.path);
+  const workspace = join(directory.path, 'run-reconnected');
+  await mkdir(workspace);
+  await writeFile(
+    join(directory.path, 'active.json'),
+    JSON.stringify({ pid: process.pid, processStartedAt: 'fixture-start', workspace }),
+  );
+  const getProcessStartTime = vi.fn(() => 'fixture-start');
+  const updater = createForkUpdater({ ...options, getProcessStartTime });
+  expect(updater.getStatus().phase).toBe('updating');
+  getProcessStartTime.mockReturnValue('different-start');
+  vi.advanceTimersByTime(1000);
+  expect(updater.getStatus().phase).toBe('error');
+  expect(commands.calls).toHaveLength(0);
+});
+
+test('a failed process identity lookup does not permit an overlapping update', async () => {
+  await using directory = await createTemporaryDirectory('codiff-fork-update-');
+  const { commands, options } = launchOptions(directory.path);
+  const workspace = join(directory.path, 'run-unverified');
+  await mkdir(workspace);
+  await writeFile(
+    join(directory.path, 'active.json'),
+    JSON.stringify({ pid: process.pid, processStartedAt: 'fixture-start', workspace }),
+  );
+  const updater = createForkUpdater({
+    ...options,
+    getProcessStartTime: () => {
+      throw new Error('Process lookup unavailable.');
+    },
+  });
+  expect((await updater.applyUpdate()).phase).toBe('updating');
+  expect(updater.getStatus().message).toContain('Cannot verify the saved update process');
   expect(commands.calls).toHaveLength(0);
 });
 

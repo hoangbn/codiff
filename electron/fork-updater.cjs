@@ -1,5 +1,6 @@
 // @ts-check
 
+const { execFileSync } = require('node:child_process');
 const {
   closeSync,
   fstatSync,
@@ -26,6 +27,24 @@ const RESULT_SCHEMA = {
   },
   required: ['outcome', 'summary'],
   type: 'object',
+};
+
+/** @param {number} pid */
+const readProcessStartTime = (pid) => {
+  try {
+    return (
+      execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      }).trim() || null
+    );
+  } catch (error) {
+    if (/** @type {{ status?: number }} */ (error).status === 1) {
+      return null;
+    }
+    throw error;
+  }
 };
 
 /** @param {string} path */
@@ -63,11 +82,13 @@ ${JSON.stringify(context, null, 2)}`;
 /**
  * @param {{
  *   appPath: string;
+ *   confirmUpdate: () => Promise<boolean>;
  *   currentVersion: string;
  *   isPackaged: boolean;
  *   platform: string;
  *   updateDirectory: string;
  *   getModel?: () => string;
+ *   getProcessStartTime?: (pid: number) => string | null;
  *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   getEnvironment?: typeof getCommandEnvironment;
  *   onStatusChange?: (status: import('../core/types.ts').CodiffUpdateStatus) => void;
@@ -76,9 +97,11 @@ ${JSON.stringify(context, null, 2)}`;
 const createForkUpdater = ({
   appPath,
   commandTransport,
+  confirmUpdate,
   currentVersion,
   getEnvironment = getCommandEnvironment,
   getModel,
+  getProcessStartTime = readProcessStartTime,
   isPackaged,
   onStatusChange,
   platform,
@@ -86,7 +109,7 @@ const createForkUpdater = ({
 }) => {
   /** @type {import('../core/types.ts').CodiffUpdateStatus} */
   let status = { currentVersion, phase: 'available', strategy: 'fork' };
-  /** @type {{ pid: number; workspace: string } | null} */
+  /** @type {{ pid: number; processStartedAt: string; workspace: string } | null} */
   let active = null;
   let ownsProcess = false;
   /** @type {ReturnType<typeof setInterval> | undefined} */
@@ -137,11 +160,15 @@ const createForkUpdater = ({
     }
     if (!ownsProcess) {
       try {
-        process.kill(active.pid, 0);
-      } catch (error) {
-        if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ESRCH') {
+        if (getProcessStartTime(active.pid) !== active.processStartedAt) {
           finish();
+          return;
         }
+      } catch {
+        setStatus(
+          'updating',
+          `Cannot verify the saved update process. Inspect ${join(active.workspace, 'codex.log')}.`,
+        );
         return;
       }
     }
@@ -171,6 +198,8 @@ const createForkUpdater = ({
     if (
       Number.isSafeInteger(saved.pid) &&
       saved.pid > 0 &&
+      typeof saved.processStartedAt === 'string' &&
+      saved.processStartedAt.trim() &&
       typeof saved.workspace === 'string' &&
       dirname(saved.workspace) === updateDirectory &&
       basename(saved.workspace).startsWith('run-')
@@ -191,8 +220,15 @@ const createForkUpdater = ({
     if (!isPackaged || platform !== 'darwin' || !basename(appPath).endsWith('.app')) {
       return setStatus('error', 'Update Fork requires an installed macOS Codiff.app.');
     }
-    setStatus('updating', 'Starting Codex with full local access…');
+    const previousStatus = { ...status };
+    setStatus('updating', 'Waiting for Update Fork confirmation…');
     try {
+      if (!(await confirmUpdate())) {
+        status = previousStatus;
+        onStatusChange?.({ ...status });
+        return { ...status };
+      }
+      setStatus('updating', 'Starting Codex with full local access…');
       const environment = await getEnvironment();
       const transport = resolveAgentCommandTransport(commandTransport, getCodexCommand);
       const model = getModel?.();
@@ -252,9 +288,14 @@ const createForkUpdater = ({
       if (!child.pid) {
         return setStatus('error', 'Codex could not start. Check the CLI installation.');
       }
-      active = { pid: child.pid, workspace };
+      active = { pid: child.pid, processStartedAt: '', workspace };
       ownsProcess = true;
       try {
+        const processStartedAt = getProcessStartTime(child.pid);
+        if (!processStartedAt) {
+          throw new Error('Codex exited before its process identity could be saved.');
+        }
+        active.processStartedAt = processStartedAt;
         writeFileSync(activePath, JSON.stringify(active), { mode: 0o600 });
       } catch (error) {
         child.kill();

@@ -23,9 +23,14 @@ implementation in the app.
 
 The button displays running, failed and completed states; its tooltip shows
 Codex's latest progress or result. Repeated clicks do not start concurrent jobs.
+Every entry point, including the app menu, asks for confirmation of Codex's
+unrestricted filesystem/network access and lack of interactive approvals before
+starting the task. Cancelling leaves the installed app untouched.
 The job is detached with its output redirected to a file, so closing Codiff
 does not terminate it. A relaunched app reconnects to the saved job rather than
 starting another one.
+Reconnection checks the saved process start time as well as its PID so an
+unrelated process reusing that PID does not leave the updater stuck running.
 
 Task instructions, JSON event logs and the final structured result live under
 `fork-updates/run-*` in Electron's user-data directory (normally
