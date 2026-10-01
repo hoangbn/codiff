@@ -1637,6 +1637,100 @@ test('branch+ preserves racy-index checks for same-size text and image edits', a
   });
 });
 
+test.each(['loose', 'packed', 'alternate'])(
+  'branch+ preserves original %s object bytes and timestamps across reads',
+  async (storage) => {
+    await withRepo(async (originalRepo) => {
+      const originalImage = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      );
+      const changedImage = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zs7sAAAAASUVORK5CYII=',
+        'base64',
+      );
+      await writeRepoFile(originalRepo, 'file.txt', 'base\n');
+      await writeRepoFile(originalRepo, 'pixel.png', originalImage);
+      await writeRepoFile(originalRepo, 'stored.png', changedImage);
+      await commitAll(originalRepo, 'base');
+      const base = (await git(originalRepo, ['rev-parse', 'HEAD'])).trim();
+      await writeRepoFile(originalRepo, 'file.txt', 'committed\n');
+      await commitAll(originalRepo, 'feature');
+      if (storage === 'packed') {
+        await git(originalRepo, ['repack', '-ad']);
+      }
+      await using cloneDirectory = await createTemporaryDirectory('codiff-shared-clone-');
+      const repo = storage === 'alternate' ? join(cloneDirectory.path, 'checkout') : originalRepo;
+      if (storage === 'alternate') {
+        await git(originalRepo, ['clone', '--shared', originalRepo, repo]);
+      }
+      await writeRepoFile(repo, 'file.txt', 'working\n');
+      await writeRepoFile(repo, 'copy.txt', 'committed\n');
+      await writeRepoFile(repo, 'pixel.png', changedImage);
+      const objects = join(originalRepo, '.git/objects');
+      const readObjects = async (
+        directory = objects,
+      ): Promise<
+        Array<{
+          contents: Buffer;
+          ctimeNs: bigint;
+          mtimeNs: bigint;
+          path: string;
+        }>
+      > => {
+        const entries = await readdir(directory, { withFileTypes: true });
+        const files = await Promise.all(
+          entries.map(async (entry) => {
+            const path = join(directory, entry.name);
+            if (entry.isDirectory()) {
+              return readObjects(path);
+            }
+            const metadata = await stat(path, { bigint: true });
+            return [
+              {
+                contents: readFileSync(path),
+                ctimeNs: metadata.ctimeNs,
+                mtimeNs: metadata.mtimeNs,
+                path,
+              },
+            ];
+          }),
+        );
+        return files.flat().sort((left, right) => left.path.localeCompare(right.path));
+      };
+      const oldTime = new Date('2020-01-01T00:00:00.000Z');
+      for (const { path } of await readObjects()) {
+        await utimes(path, oldTime, oldTime);
+      }
+      const before = await readObjects();
+      const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+      expect(await readObjects()).toEqual(before);
+      const loaded = await readDiffSectionContent(repo, {
+        force: true,
+        kind: 'combined',
+        path: 'file.txt',
+        source: state.source,
+      });
+      expect(loaded.oldFile?.contents).toBe('base\n');
+      expect(loaded.newFile?.contents).toBe('working\n');
+      expect(await readObjects()).toEqual(before);
+      const image = await readDiffImageContent(repo, {
+        kind: 'combined',
+        path: 'pixel.png',
+        source: state.source,
+      });
+      expect(image).toMatchObject({
+        newImage: { dataUrl: `data:image/png;base64,${changedImage.toString('base64')}` },
+        oldImage: { dataUrl: `data:image/png;base64,${originalImage.toString('base64')}` },
+        status: 'ready',
+      });
+      expect(await readObjects()).toEqual(before);
+      await readRepositoryState(repo, state.source);
+      expect(await readObjects()).toEqual(before);
+    });
+  },
+);
+
 test('branch+ matches staging and committing all changes without changing the repository', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');

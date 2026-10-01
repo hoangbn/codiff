@@ -59,6 +59,27 @@ const withBranchSnapshot = async (repoRoot, run) => {
       }
     }
 
+    const indexEntries = (await git(repoRoot, ['ls-files', '--stage', '-z'], { env }))
+      .split('\0')
+      .filter(Boolean);
+    const indexObjects = [
+      ...new Set(
+        indexEntries.flatMap((entry) => {
+          const [mode, object] = entry.slice(0, entry.indexOf('\t')).split(' ');
+          return mode === '160000' || /^0+$/.test(object) ? [] : [object];
+        }),
+      ),
+    ];
+    const packDirectory = join(env.GIT_OBJECT_DIRECTORY, 'pack');
+    await fs.mkdir(packDirectory);
+    await gitBufferWithInput(
+      repoRoot,
+      ['pack-objects', '--non-empty', join(packDirectory, 'pack')],
+      indexObjects.length ? `${indexObjects.join('\n')}\n` : '',
+      { env },
+    );
+    const writeEnv = { ...env, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined };
+
     const [untracked, originalStatus] = await Promise.all([
       listUntrackedItems(repoRoot),
       git(repoRoot, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-uno'], { env }),
@@ -89,14 +110,14 @@ const withBranchSnapshot = async (repoRoot, run) => {
         ...removedUntracked,
       ]),
     ];
-    await git(repoRoot, ['add', '--update'], { env });
+    await git(repoRoot, ['add', '--update'], { env: writeEnv });
     while (untrackedPaths.length > 0) {
       try {
         await gitBufferWithInput(
           repoRoot,
           ['add', '--ignore-errors', '--pathspec-from-file=-', '--pathspec-file-nul'],
           Buffer.from(`${untrackedPaths.map((path) => `:(literal)${path}`).join('\0')}\0`),
-          { env },
+          { env: writeEnv },
         );
         break;
       } catch (error) {
@@ -130,7 +151,7 @@ const withBranchSnapshot = async (repoRoot, run) => {
       }
     }
 
-    const tree = (await git(repoRoot, ['write-tree'], { env })).trim();
+    const tree = (await git(repoRoot, ['write-tree'], { env: writeEnv })).trim();
     return await run({
       conflictedPaths: status
         .filter((item) => item.status === 'conflicted')
