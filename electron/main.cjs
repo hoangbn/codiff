@@ -57,6 +57,7 @@ const {
 } = require('./config.cjs');
 const { readReviewAssistantReply } = require('./review-assist.cjs');
 const { createForkUpdater } = require('./fork-updater.cjs');
+const { updateForkFromMenu } = require('./main/fork-update.cjs');
 const { parseReviewUrl, resolveReviewUrl } = require('./review-source.cjs');
 const {
   getPlanWindowTitle,
@@ -585,7 +586,7 @@ const buildApplicationMenu = () =>
                 { role: 'about' },
                 {
                   click: () => {
-                    void updateForkFromMenu();
+                    void updateForkFromMenu(updater, dialog);
                   },
                   label: 'Update Fork',
                 },
@@ -1238,23 +1239,6 @@ const initUpdater = () => {
     platform: process.platform,
     updateDirectory: join(app.getPath('userData'), 'fork-updates'),
   });
-};
-
-const updateForkFromMenu = async () => {
-  if (!updater) {
-    return;
-  }
-
-  try {
-    await updater.applyUpdate();
-  } catch (error) {
-    void dialog.showMessageBox({
-      message: `Updating the fork failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      type: 'error',
-    });
-  }
 };
 
 const lock =

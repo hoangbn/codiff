@@ -115,6 +115,18 @@ const createForkUpdater = ({
   /** @type {ReturnType<typeof setInterval> | undefined} */
   let poll;
   const activePath = join(updateDirectory, 'active.json');
+  const statusPath = join(updateDirectory, 'status.json');
+
+  try {
+    const saved = JSON.parse(readFileSync(statusPath, 'utf8'));
+    if (
+      ['updated', 'error'].includes(saved.phase) &&
+      typeof saved.message === 'string' &&
+      saved.message.trim()
+    ) {
+      status = { ...status, message: saved.message, phase: saved.phase };
+    }
+  } catch {}
 
   /** @param {import('../core/types.ts').CodiffUpdatePhase} phase @param {string} [message] */
   const setStatus = (phase, message) => {
@@ -133,7 +145,6 @@ const createForkUpdater = ({
     ownsProcess = false;
     clearInterval(poll);
     try {
-      rmSync(activePath, { force: true });
       if (failure) {
         throw new Error(failure);
       }
@@ -150,6 +161,15 @@ const createForkUpdater = ({
       setStatus(
         'error',
         `${error instanceof Error ? error.message : String(error)} Inspect ${join(workspace, 'codex.log')} before retrying.`,
+      );
+    }
+    try {
+      writeFileSync(statusPath, JSON.stringify(status), { mode: 0o600 });
+      rmSync(activePath, { force: true });
+    } catch (error) {
+      setStatus(
+        'error',
+        `${status.message} Could not save the update status: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   };

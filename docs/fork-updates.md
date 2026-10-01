@@ -31,11 +31,14 @@ does not terminate it. A relaunched app reconnects to the saved job rather than
 starting another one.
 Reconnection checks the saved process start time as well as its PID so an
 unrelated process reusing that PID does not leave the updater stuck running.
+Completed and failed task results are retained across app relaunches. The app
+menu also displays immediate launch failures when no review window is open.
 
 Task instructions, JSON event logs and the final structured result live under
 `fork-updates/run-*` in Electron's user-data directory (normally
 `~/Library/Application Support/Codiff` on macOS). Keep that workspace when
 investigating a failed update, especially if the app was closed during install.
+The latest completed task status is saved in `fork-updates/status.json`.
 An interrupted process without a valid result is an error, not success.
 
 ## Requirements and limits

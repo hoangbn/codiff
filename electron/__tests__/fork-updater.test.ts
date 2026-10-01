@@ -194,6 +194,28 @@ test.each([false, true])(
     command.close(1);
     expect(updater.getStatus().phase).toBe('error');
     expect(updater.getStatus().message).toContain('code 1');
+    expect(createForkUpdater(options).getStatus()).toEqual(updater.getStatus());
+  },
+);
+
+test.each(['updated', 'up-to-date', 'blocked'])(
+  'retains a completed %s result after relaunch without starting another task',
+  async (outcome) => {
+    await using directory = await createTemporaryDirectory('codiff-fork-update-');
+    const { commands, options } = launchOptions(directory.path);
+    const updater = createForkUpdater(options);
+    await updater.applyUpdate();
+    await writeFile(
+      join(commands.calls[0].options.cwd as string, 'result.json'),
+      JSON.stringify({ outcome, summary: 'Retained result.' }),
+    );
+    commands.calls[0].close();
+    const relaunched = createForkUpdater({ ...options, currentVersion: '1.15.0' });
+    expect(relaunched.getStatus()).toEqual({
+      ...updater.getStatus(),
+      currentVersion: '1.15.0',
+    });
+    expect(commands.calls).toHaveLength(1);
   },
 );
 
