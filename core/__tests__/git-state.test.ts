@@ -7,6 +7,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -1579,6 +1580,62 @@ test.each(['commit', 'rebase'])(
     });
   },
 );
+
+test('branch+ preserves racy-index checks for same-size text and image edits', async () => {
+  await withRepo(async (repo) => {
+    const originalImage = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const changedImage = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zs7sAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const cachedTime = new Date('2020-01-01T00:00:00.000Z');
+    const paths = ['pixel.png', 'same-size.txt'];
+    await git(repo, ['config', 'core.checkStat', 'minimal']);
+    await git(repo, ['config', 'core.trustctime', 'false']);
+    await writeRepoFile(repo, 'pixel.png', originalImage);
+    await writeRepoFile(repo, 'same-size.txt', 'before\n');
+    for (const path of paths) {
+      await utimes(join(repo, path), cachedTime, cachedTime);
+    }
+    await commitAll(repo, 'base');
+    const target = (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    await writeRepoFile(repo, 'pixel.png', changedImage);
+    await writeRepoFile(repo, 'same-size.txt', 'after!\n');
+    for (const path of paths) {
+      await utimes(join(repo, path), cachedTime, cachedTime);
+    }
+    const indexPath = join(repo, '.git/index');
+    await utimes(indexPath, cachedTime, cachedTime);
+    const originalIndex = readFileSync(indexPath);
+    const originalIndexMtime = (await stat(indexPath)).mtimeMs;
+    expect(
+      (await git(repo, ['--no-optional-locks', 'diff', '--name-only', 'HEAD'])).trim().split('\n'),
+    ).toEqual(paths);
+
+    const state = await readRepositoryState(repo, { ref: target, type: 'branch-working-tree' });
+    expect(state.files.map((file) => file.path)).toEqual(paths);
+    expect(state.files.find((file) => file.path === 'same-size.txt')?.sections[0]).toMatchObject({
+      kind: 'combined',
+      newFile: { contents: 'after!\n' },
+      oldFile: { contents: 'before\n' },
+    });
+    const image = await readDiffImageContent(repo, {
+      kind: 'combined',
+      path: 'pixel.png',
+      source: state.source,
+    });
+    expect(image).toMatchObject({
+      newImage: { dataUrl: `data:image/png;base64,${changedImage.toString('base64')}` },
+      oldImage: { dataUrl: `data:image/png;base64,${originalImage.toString('base64')}` },
+      status: 'ready',
+    });
+    expect(readFileSync(indexPath)).toEqual(originalIndex);
+    expect((await stat(indexPath)).mtimeMs).toBe(originalIndexMtime);
+  });
+});
 
 test('branch+ matches staging and committing all changes without changing the repository', async () => {
   await withRepo(async (repo) => {
