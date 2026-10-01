@@ -19,15 +19,22 @@ const pathEscapes = new Map([
 ]);
 
 /** @param {string} path */
-const unquoteAlternatePath = (path) =>
-  path.startsWith('"')
-    ? path
-        .slice(1, -1)
-        .replace(
-          /\\(?:[0-7]{3}|[abfnrtv"\\])/g,
-          (escape) => pathEscapes.get(escape) || String.fromCharCode(parseInt(escape.slice(1), 8)),
-        )
-    : path;
+const unquoteAlternatePath = (path) => {
+  const bytes = path.startsWith('"')
+    ? Buffer.from(
+        path
+          .slice(1, -1)
+          .replace(
+            /\\(?:[0-7]{3}|[abfnrtv"\\])/g,
+            (escape) =>
+              pathEscapes.get(escape) || String.fromCharCode(parseInt(escape.slice(1), 8)),
+          ),
+        'latin1',
+      )
+    : Buffer.from(path);
+  const decoded = bytes.toString('utf8');
+  return Buffer.from(decoded).equals(bytes) ? decoded : bytes;
+};
 
 /**
  * @typedef {import('./common.cjs').StatusItem} StatusItem
@@ -58,13 +65,23 @@ const withBranchSnapshot = async (repoRoot, run) => {
     const sourceObjects = [
       ...new Set([
         objectsPath,
-        ...(await git(repoRoot, ['-c', 'core.quotePath=false', 'count-objects', '-v']))
+        ...(await git(repoRoot, ['-c', 'core.quotePath=true', 'count-objects', '-v']))
           .split('\n')
           .filter((line) => line.startsWith('alternate: '))
           .map((line) => line.slice('alternate: '.length))
           .map(unquoteAlternatePath),
       ]),
     ];
+    const sourceDirectories = await Promise.all(
+      sourceObjects.map(async (source, index) => {
+        if (typeof source === 'string') {
+          return source;
+        }
+        const alias = join(directory, `object-source-${index}`);
+        await fs.symlink(source, alias, 'dir');
+        return alias;
+      }),
+    );
     const env = {
       ...process.env,
       GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
@@ -79,10 +96,18 @@ const withBranchSnapshot = async (repoRoot, run) => {
     await fs.mkdir(env.GIT_OBJECT_DIRECTORY);
     for (let attempt = 0; ; attempt++) {
       try {
-        for (const source of sourceObjects) {
+        for (const source of sourceDirectories) {
           await fs.cp(source, env.GIT_OBJECT_DIRECTORY, {
             dereference: true,
-            filter: (path) => path !== join(source, 'info/alternates'),
+            filter: async (path, target) => {
+              if (path === join(source, 'info/alternates')) {
+                return false;
+              }
+              if ((await fs.stat(path)).isDirectory()) {
+                await fs.mkdir(target, { mode: 0o700, recursive: true });
+              }
+              return true;
+            },
             force: false,
             mode: constants.COPYFILE_FICLONE,
             recursive: true,

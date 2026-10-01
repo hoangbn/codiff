@@ -1771,6 +1771,100 @@ test('branch+ reads C-quoted alternate object paths without changing their times
   });
 });
 
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'branch+ can snapshot read-only alternate object directories without changing them',
+  async () => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'file.txt', 'base\n');
+      await commitAll(repo, 'base');
+      const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+      await using alternateDirectory = await createTemporaryDirectory('codiff-readonly-alternate-');
+      const alternate = join(alternateDirectory.path, 'objects');
+      await rename(join(repo, '.git/objects'), alternate);
+      await mkdir(join(repo, '.git/objects/info'), { recursive: true });
+      await writeFile(join(repo, '.git/objects/info/alternates'), `${alternate}\n`);
+      const directories = [
+        alternate,
+        ...(await readdir(alternate, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => join(alternate, entry.name)),
+      ];
+      await Promise.all(directories.map((directory) => chmod(directory, 0o555)));
+      try {
+        const before = await Promise.all(
+          directories.map(async (directory) => {
+            const metadata = await stat(directory, { bigint: true });
+            return [metadata.mode, metadata.mtimeNs, metadata.ctimeNs];
+          }),
+        );
+        await writeRepoFile(repo, 'file.txt', 'working\n');
+        const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+        const loaded = await readDiffSectionContent(repo, {
+          force: true,
+          kind: 'combined',
+          path: 'file.txt',
+          source: state.source,
+        });
+        expect(loaded.oldFile?.contents).toBe('base\n');
+        expect(loaded.newFile?.contents).toBe('working\n');
+        const after = await Promise.all(
+          directories.map(async (directory) => {
+            const metadata = await stat(directory, { bigint: true });
+            return [metadata.mode, metadata.mtimeNs, metadata.ctimeNs];
+          }),
+        );
+        expect(after).toEqual(before);
+      } finally {
+        await Promise.all(directories.map((directory) => chmod(directory, 0o755)));
+      }
+    });
+  },
+);
+
+test.skipIf(process.platform !== 'linux')(
+  'branch+ preserves non-UTF-8 alternate object paths',
+  async () => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'file.txt', 'base\n');
+      await commitAll(repo, 'base');
+      const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+      const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
+      await using alternateDirectory = await createTemporaryDirectory('codiff-byte-alternate-');
+      const alternate = Buffer.concat([
+        Buffer.from(join(alternateDirectory.path, 'objects-')),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await rename(join(repo, '.git/objects'), alternate);
+      await mkdir(join(repo, '.git/objects/info'), { recursive: true });
+      await writeFile(
+        join(repo, '.git/objects/info/alternates'),
+        Buffer.concat([alternate, Buffer.from('\n')]),
+      );
+      const objectPath = Buffer.concat([
+        alternate,
+        Buffer.from(`/${object.slice(0, 2)}/${object.slice(2)}`),
+      ]);
+      const beforeContents = readFileSync(objectPath);
+      const before = await stat(objectPath, { bigint: true });
+      expect(await git(repo, ['cat-file', '-p', object])).toBe('base\n');
+      await writeRepoFile(repo, 'file.txt', 'working\n');
+      const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+      const loaded = await readDiffSectionContent(repo, {
+        force: true,
+        kind: 'combined',
+        path: 'file.txt',
+        source: state.source,
+      });
+      expect(loaded.oldFile?.contents).toBe('base\n');
+      expect(loaded.newFile?.contents).toBe('working\n');
+      expect(readFileSync(objectPath)).toEqual(beforeContents);
+      const after = await stat(objectPath, { bigint: true });
+      expect(after.mtimeNs).toBe(before.mtimeNs);
+      expect(after.ctimeNs).toBe(before.ctimeNs);
+    });
+  },
+);
+
 test('branch+ retries a cache copy interrupted by Git repacking', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');
