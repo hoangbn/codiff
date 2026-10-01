@@ -41,6 +41,7 @@ import {
 } from './app/hooks/useDocumentAppearance.ts';
 import { useResizableSidebar } from './app/hooks/useResizableSidebar.ts';
 import { useReviewCommentDrafts } from './app/hooks/useReviewCommentDrafts.ts';
+import { useReviewContentController } from './app/hooks/useReviewContentController.ts';
 import { useReviewFileState } from './app/hooks/useReviewState.ts';
 import { createDefaultConfig } from './config/defaults.ts';
 import { matchesShortcut } from './config/keymap.ts';
@@ -65,6 +66,7 @@ import {
   writeSidebarWidth,
 } from './lib/sidebar-width.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
+import type { ReviewContentLoader } from './review-content-loader.ts';
 import type {
   GitIdentity,
   PullRequestMergeOptions,
@@ -150,6 +152,8 @@ const writeStoredSidebarCollapsed = (sidebarCollapsed: boolean) => {
 export type ReviewWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
 export type ReviewMode = 'comments' | 'tree' | 'walkthrough';
 
+export type { ReviewContentLoader } from './review-content-loader.ts';
+
 const getSnapshotReviewComments = (
   snapshot: SharedWalkthroughSnapshot,
 ): ReadonlyArray<ReviewComment> => {
@@ -182,6 +186,7 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
 
 export type ReviewSurfaceProps = {
   commenting?: ReviewCommenting;
+  contentLoader?: ReviewContentLoader;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
   initialMode?: ReviewMode;
@@ -232,6 +237,7 @@ const shouldCollapseSidebarInitially = () =>
 
 export function ReviewSurface({
   commenting,
+  contentLoader,
   externalUrl,
   gitIdentity = null,
   initialMode,
@@ -247,6 +253,14 @@ export function ReviewSurface({
   sourceDescriptionFooterAside,
   title,
 }: ReviewSurfaceProps) {
+  const {
+    files: reviewFiles,
+    itemVersionByPath: reviewContentItemVersionByPath,
+    loadingSectionIds,
+    onLoadImageContent,
+    onLoadSection,
+    onLoadSectionContents,
+  } = useReviewContentController({ contentLoader, snapshot });
   const canComment = commenting?.canComment ?? Boolean(interactive);
   const deleteShare = useCallback(async () => {
     if (
@@ -277,7 +291,7 @@ export function ReviewSurface({
   );
   const navigation = useNarrativeNavigation(
     sharedWalkthrough,
-    snapshot.files,
+    reviewFiles,
     `${snapshot.repository.root}:${getSourceKey(snapshot.repository.source)}`,
   );
   const keymap = useMemo(() => createDefaultConfig().keymap, []);
@@ -339,6 +353,17 @@ export function ReviewSurface({
   } = useReviewFileState({
     initialSelectedPath: snapshot.files[0]?.path ?? null,
   });
+  const reviewItemVersionByKey = useMemo(() => {
+    const contentVersions = reviewContentItemVersionByPath;
+    if (Object.keys(contentVersions).length === 0) {
+      return itemVersionByKey;
+    }
+    const next = { ...itemVersionByKey };
+    for (const [path, version] of Object.entries(contentVersions)) {
+      next[path] = (next[path] ?? 0) + version;
+    }
+    return next;
+  }, [itemVersionByKey, reviewContentItemVersionByPath]);
   const { resizeSidebar, sidebarWidth } = useResizableSidebar({
     collapseThreshold: SIDEBAR_COLLAPSE_THRESHOLD,
     onCollapse: () => {
@@ -417,21 +442,33 @@ export function ReviewSurface({
   const interactiveRef = useRef(interactive);
   const handledHashTargetRef = useRef<string | null>(null);
 
-  const visibleFiles = useMemo(
+  const focusPath = snapshot.files[0]?.path;
+  const visibleFiles = useMemo(() => {
+    const files = sortFiles(reviewFiles).filter(
+      (file) =>
+        fuzzyMatches(file.path, fileSearchQuery) &&
+        fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
+    );
+    const focusIndex = files.findIndex((file) => file.path === focusPath);
+    const focusFile = files[focusIndex];
+    return focusIndex <= 0 || !focusFile
+      ? files
+      : [focusFile, ...files.slice(0, focusIndex), ...files.slice(focusIndex + 1)];
+  }, [fileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
+  const totalLineCount = useMemo(
     () =>
-      sortFiles(snapshot.files).filter(
-        (file) =>
-          fuzzyMatches(file.path, fileSearchQuery) &&
-          fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
+      getTotalDiffLineCount(
+        visibleFiles.map((file) => getDiffLineCount(file, snapshot.preferences.showWhitespace)),
       ),
-    [fileSearchQuery, snapshot.files, snapshot.preferences.showWhitespace],
+    [snapshot.preferences.showWhitespace, visibleFiles],
   );
+  const showTotalLineCount = sidebarMode !== 'comments' && totalLineCount.countable;
   const visibleSelectedPath =
     selectedPath && visibleFiles.some((file) => file.path === selectedPath)
       ? selectedPath
       : (visibleFiles[0]?.path ?? null);
   const initialMarkdownPreviewSectionIds = useMemo(() => {
-    const nonGeneratedFiles = snapshot.files.filter((file) => !isGeneratedWalkthroughFile(file));
+    const nonGeneratedFiles = reviewFiles.filter((file) => !isGeneratedWalkthroughFile(file));
     if (
       nonGeneratedFiles.length === 0 ||
       !nonGeneratedFiles.every((file) => isMarkdownFilePath(file.path))
@@ -440,11 +477,11 @@ export function ReviewSurface({
     }
 
     return new Set(
-      snapshot.files
+      reviewFiles
         .filter((file) => isMarkdownFilePath(file.path))
         .flatMap((file) => file.sections.map((section) => section.id)),
     );
-  }, [snapshot.files]);
+  }, [reviewFiles]);
 
   useDocumentAppearance({
     codeFontFamily: snapshot.preferences.codeFontFamily,
@@ -925,13 +962,15 @@ export function ReviewSurface({
     hunkNavigation: null,
     initialMarkdownPreviewSectionIds,
     isReadOnly: !canComment,
-    itemVersionByKey,
+    itemVersionByKey: reviewItemVersionByKey,
     keymap,
-    loadingSectionIds: new Set<string>(),
+    loadingSectionIds,
     onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
-    onLoadSection: noop,
+    onLoadImageContent,
+    onLoadSection,
+    onLoadSectionContents,
     onResolveThread: resolveDiscussion ?? noop,
     onSaveCommentEdit: updateExistingReviewComment,
     onSelectPathFromScroll: noop,
@@ -1326,7 +1365,7 @@ export function ReviewSurface({
         ) : (
           <NarrativeWalkthroughView
             allowCommit={false}
-            files={snapshot.files}
+            files={reviewFiles}
             navigation={navigation}
             onActiveReviewTargetChange={noop}
             onCommit={disabledCommit}

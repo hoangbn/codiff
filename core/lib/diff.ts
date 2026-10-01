@@ -39,15 +39,60 @@ export const shouldPreloadSectionContentsForSearch = (section: DiffSection) =>
   shouldLoadDiffSectionContents(section) ||
   (section.summary?.canLoad !== false && isPatchOnlyDiffSection(section));
 
+export const getDiffSectionLoadKey = (file: ChangedFile, section: DiffSection) =>
+  JSON.stringify([file.path, file.fingerprint, section.kind, section.id]);
+
+export const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
+  isPatchOnlyDiffSection(section)
+    ? {
+        ...section,
+        summary: {
+          canLoad: false,
+          reason: 'Codiff could not load full file context.',
+        },
+      }
+    : {
+        ...section,
+        loadState: 'error',
+        summary: {
+          canLoad: false,
+          reason: 'Codiff could not load this file.',
+        },
+      };
+
+export const updateDiffSection = (
+  files: ReadonlyArray<ChangedFile>,
+  targetFile: ChangedFile,
+  targetSection: DiffSection,
+  update: (section: DiffSection) => DiffSection,
+): ReadonlyArray<ChangedFile> => {
+  let didUpdate = false;
+  const nextFiles = files.map((file) => {
+    if (file.path !== targetFile.path || file.fingerprint !== targetFile.fingerprint) {
+      return file;
+    }
+
+    let didUpdateFile = false;
+    const sections = file.sections.map((section) => {
+      if (section.id !== targetSection.id || section.kind !== targetSection.kind) {
+        return section;
+      }
+      didUpdateFile = true;
+      didUpdate = true;
+      return update(section);
+    });
+    return didUpdateFile ? { ...file, sections } : file;
+  });
+
+  return didUpdate ? nextFiles : files;
+};
+
 // Full file contents fetched lazily for patch-only sections via the CodeView
 // `loadDiffFiles` option. Kept outside React state so the library's in-place
-// hydration of the rendered diff is not reset by re-renders. Keyed without the
-// whitespace flag so re-parses after a whitespace toggle reuse the contents.
-const getLoadedContentsKey = (file: ChangedFile, section: DiffSection) =>
-  `${file.fingerprint}:${section.id}:${getSectionCacheIdentity(section)}`;
-
-const loadedSectionContents = new Map<string, FileDiffLoadedFiles>();
-const pendingSectionLoads = new Map<string, Promise<FileDiffLoadedFiles>>();
+// hydration of the rendered diff is not reset by re-renders. Section object
+// identity scopes the cache to one repository snapshot and host loader.
+const loadedSectionContents = new WeakMap<DiffSection, FileDiffLoadedFiles>();
+const pendingSectionLoads = new WeakMap<DiffSection, Promise<FileDiffLoadedFiles>>();
 
 type DiffContextBoundary = {
   addition: number;
@@ -126,21 +171,19 @@ const fileDiffSectionLookup = new WeakMap<
 export const getSectionForFileDiff = (fileDiff: FileDiffMetadata) =>
   fileDiffSectionLookup.get(fileDiff);
 
-const getLoadedSectionContents = (file: ChangedFile, section: DiffSection) =>
-  loadedSectionContents.get(getLoadedContentsKey(file, section));
+const getLoadedSectionContents = (section: DiffSection) => loadedSectionContents.get(section);
 
 export const loadSectionContents = (
   file: ChangedFile,
   section: DiffSection,
   load: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>,
 ): Promise<FileDiffLoadedFiles> => {
-  const key = getLoadedContentsKey(file, section);
-  const loaded = loadedSectionContents.get(key);
+  const loaded = loadedSectionContents.get(section);
   if (loaded) {
     return Promise.resolve(loaded);
   }
 
-  const pending = pendingSectionLoads.get(key);
+  const pending = pendingSectionLoads.get(section);
   if (pending) {
     return pending;
   }
@@ -151,13 +194,13 @@ export const loadSectionContents = (
       // contents reach it, so cache hits keep returning the hydrated diff.
       // The hydrated re-parse branch in `parseSectionDiffWithOptions` covers
       // re-parses under a different cache key (e.g. a whitespace toggle).
-      loadedSectionContents.set(key, files);
+      loadedSectionContents.set(section, files);
       return files;
     })
     .finally(() => {
-      pendingSectionLoads.delete(key);
+      pendingSectionLoads.delete(section);
     });
-  pendingSectionLoads.set(key, promise);
+  pendingSectionLoads.set(section, promise);
   return promise;
 };
 
@@ -352,7 +395,7 @@ const createEmptyFileDiff = (file: ChangedFile, section: DiffSection): FileDiffM
   unifiedLineCount: 0,
 });
 
-const parsedDiffCache = new Map<string, FileDiffMetadata>();
+const parsedDiffCache = new WeakMap<DiffSection, Map<string, FileDiffMetadata>>();
 
 const getSectionCacheIdentity = (section: DiffSection) =>
   [
@@ -372,7 +415,8 @@ export const parseSectionDiffWithOptions = (
   const cacheKey = `${file.fingerprint}:${section.id}:${getSectionCacheIdentity(section)}:${
     showWhitespace ? 'ws' : 'ignore-ws'
   }`;
-  const cached = parsedDiffCache.get(cacheKey);
+  const sectionCache = parsedDiffCache.get(section);
+  const cached = sectionCache?.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -396,7 +440,7 @@ export const parseSectionDiffWithOptions = (
       ?.files[0];
     if (parsedFileDiff) {
       const context = focusedSectionContext.get(section);
-      const loaded = parsedFileDiff.isPartial ? getLoadedSectionContents(file, section) : undefined;
+      const loaded = parsedFileDiff.isPartial ? getLoadedSectionContents(section) : undefined;
       let hydrated: FileDiffMetadata | null = null;
       if (
         context &&
@@ -437,7 +481,11 @@ export const parseSectionDiffWithOptions = (
     }
   }
 
-  parsedDiffCache.set(cacheKey, fileDiff);
+  if (sectionCache) {
+    sectionCache.set(cacheKey, fileDiff);
+  } else {
+    parsedDiffCache.set(section, new Map([[cacheKey, fileDiff]]));
+  }
   return fileDiff;
 };
 

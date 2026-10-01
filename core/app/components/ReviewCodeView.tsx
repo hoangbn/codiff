@@ -249,16 +249,20 @@ function FileEditButton({
   );
 }
 
+type SectionContextLoadState = 'error' | 'loading';
+
 function CodeViewHeader({
   allowViewedToggle,
   canCreateFileComment,
   editActions,
   isEditing = false,
+  contextLoadState,
   isSectionLoading,
   meta,
   onCreateFileComment,
   onLoadSection,
   onOpenFile,
+  onRetrySectionContents,
   onToggleCollapsed,
   onToggleMarkdownPreview,
   onToggleViewed,
@@ -268,11 +272,13 @@ function CodeViewHeader({
   canCreateFileComment: boolean;
   editActions?: ReactNode;
   isEditing?: boolean;
+  contextLoadState: SectionContextLoadState | undefined;
   isSectionLoading: boolean;
   meta: CodeViewItemMetadata;
   onCreateFileComment: () => void;
-  onLoadSection: (file: ChangedFile, section: DiffSection) => void;
+  onLoadSection?: (file: ChangedFile, section: DiffSection) => void;
   onOpenFile?: (file: ChangedFile) => void;
+  onRetrySectionContents: () => void;
   onToggleCollapsed: (file: ChangedFile, isCollapsed: boolean, reviewKey: string) => void;
   onToggleMarkdownPreview: (file: ChangedFile, section: DiffSection) => void;
   onToggleViewed: (file: ChangedFile, isViewed: boolean, reviewIdentity: ReviewIdentity) => void;
@@ -292,7 +298,7 @@ function CodeViewHeader({
     walkthroughNote,
   } = meta;
   const canOpenFile = file.status !== 'deleted';
-  const canLoadSection = shouldLoadDiffSectionContents(section);
+  const canLoadSection = Boolean(onLoadSection) && shouldLoadDiffSectionContents(section);
   const directoryEnd = file.path.lastIndexOf('/') + 1;
 
   return (
@@ -358,6 +364,16 @@ function CodeViewHeader({
           {walkthroughNote ? (
             <span className="codiff-file-note">{walkthroughNote.reason}</span>
           ) : null}
+          {contextLoadState ? (
+            <span
+              className="codiff-file-note"
+              role={contextLoadState === 'loading' ? 'status' : 'alert'}
+            >
+              {contextLoadState === 'loading'
+                ? 'Loading full file context...'
+                : 'Full file context is unavailable.'}
+            </span>
+          ) : null}
         </span>
       </div>
       <div className="codiff-file-details">
@@ -405,6 +421,16 @@ function CodeViewHeader({
             type="button"
           >
             {isSectionLoading ? 'Loading...' : 'Load'}
+          </button>
+        ) : null}
+        {contextLoadState === 'error' ? (
+          <button
+            className="codiff-load-button"
+            onClick={onRetrySectionContents}
+            title="Retry loading full file context"
+            type="button"
+          >
+            Retry
           </button>
         ) : null}
         {!readOnly || allowViewedToggle ? (
@@ -1200,21 +1226,20 @@ function ImageDiffPreview({
   useEffect(() => {
     let canceled = false;
     const activeRequestKey = requestKey;
-
-    loadImageContent({
-      kind: section.kind,
-      path: file.path,
-      source,
-    })
-      .then((nextResult) => {
+    const load = async () => {
+      try {
+        const nextResult = await loadImageContent({
+          kind: section.kind,
+          path: file.path,
+          source,
+        });
         if (!canceled) {
           setLoadState({
             requestKey: activeRequestKey,
             result: nextResult,
           });
         }
-      })
-      .catch(() => {
+      } catch {
         if (!canceled) {
           setLoadState({
             requestKey: activeRequestKey,
@@ -1224,7 +1249,9 @@ function ImageDiffPreview({
             },
           });
         }
-      });
+      }
+    };
+    void load();
 
     return () => {
       canceled = true;
@@ -2688,7 +2715,7 @@ export function ReviewCodeView({
   onDeleteComment: (commentId: string) => void;
   onFindDefinitions?: (request: DefinitionSearchRequest) => Promise<DefinitionSearchResult>;
   onLoadImageContent?: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
-  onLoadSection: (file: ChangedFile, section: DiffSection) => void;
+  onLoadSection?: (file: ChangedFile, section: DiffSection) => void;
   onLoadSectionContents?: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>;
   onOpenDefinition?: (candidate: DefinitionCandidate) => void;
   onOpenFile?: (file: ChangedFile) => void;
@@ -2749,6 +2776,9 @@ export function ReviewCodeView({
   const getPlaceholderFile = useCodeViewPlaceholderFile();
   const getAnnotations = useCodeViewAnnotations();
   const [markdownPreviewHeights] = useState(() => new Map<string, number>());
+  const [contextLoadStates, setContextLoadStates] = useState<
+    ReadonlyMap<DiffSection, SectionContextLoadState>
+  >(() => new Map());
   const markdownEditorRefs = useRef(new Map<string, MarkdownDocumentEditorHandle>());
   const refreshingMarkdownSectionsRef = useRef(new Set<string>());
   const deferredTimersRef = useRef<Set<number>>(new Set());
@@ -2988,7 +3018,7 @@ export function ReviewCodeView({
         nextSearchTargetsByBaseItemId.set(baseItemId, searchTargets);
         const markdownPreview = getMarkdownPreviewContents(file, section, fileDiff);
         const canRenderImage =
-          !isReadOnly && onLoadImageContent != null && canRenderImagePreview(file.path, section);
+          onLoadImageContent != null && canRenderImagePreview(file.path, section);
         const canRenderMarkdown = markdownPreview != null;
         const canEditMarkdown =
           canRenderMarkdown &&
@@ -3608,22 +3638,42 @@ export function ReviewCodeView({
   // Lets the library fetch full file contents when the user expands unchanged
   // context on a patch-only diff; the partial FileDiffMetadata is hydrated in
   // place (see `parseSectionDiffWithOptions` for the identity contract).
+  const updateContextLoadState = useCallback(
+    (section: DiffSection, loadState: SectionContextLoadState | undefined) => {
+      setContextLoadStates((current) => {
+        const next = new Map(current);
+        if (loadState) {
+          next.set(section, loadState);
+        } else {
+          next.delete(section);
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const loadDiffFiles = useMemo(() => {
-    if (!onLoadSectionContents || isReadOnly) {
+    if (!onLoadSectionContents) {
       return undefined;
     }
 
-    return (fileDiff: FileDiffMetadata) => {
+    return async (fileDiff: FileDiffMetadata) => {
       const target = getSectionForFileDiff(fileDiff);
       if (!target) {
-        return Promise.reject(
-          new Error(`No loadable diff section registered for '${fileDiff.name}'.`),
-        );
+        throw new Error(`No loadable diff section registered for '${fileDiff.name}'.`);
       }
 
-      return loadSectionContents(target.file, target.section, onLoadSectionContents);
+      updateContextLoadState(target.section, 'loading');
+      try {
+        const files = await loadSectionContents(target.file, target.section, onLoadSectionContents);
+        updateContextLoadState(target.section, undefined);
+        return files;
+      } catch (error) {
+        updateContextLoadState(target.section, 'error');
+        throw error;
+      }
     };
-  }, [isReadOnly, onLoadSectionContents]);
+  }, [onLoadSectionContents, updateContextLoadState]);
 
   const codeViewOptions: CodeViewOptions<ReviewAnnotationMetadata, undefined> = useMemo(
     () =>
@@ -3709,9 +3759,6 @@ export function ReviewCodeView({
               });
             return;
           }
-          if (isReadOnly) {
-            return;
-          }
           if (isInteractiveReviewEvent(line.event)) {
             return;
           }
@@ -3721,8 +3768,12 @@ export function ReviewCodeView({
             return;
           }
 
-          if (shouldLoadDiffSectionContents(meta.section)) {
+          if (onLoadSection && shouldLoadDiffSectionContents(meta.section)) {
             onLoadSection(meta.file, meta.section);
+            return;
+          }
+
+          if (isReadOnly) {
             return;
           }
 
@@ -4717,6 +4768,7 @@ export function ReviewCodeView({
           <CodeViewHeader
             allowViewedToggle={allowViewedToggle}
             canCreateFileComment={canCreateFileComments}
+            contextLoadState={contextLoadStates.get(meta.section)}
             editActions={
               isEditing ? (
                 <>
@@ -4790,6 +4842,15 @@ export function ReviewCodeView({
             onCreateFileComment={() => createFileComment(meta, item.id)}
             onLoadSection={onLoadSection}
             onOpenFile={onOpenFile}
+            onRetrySectionContents={() => {
+              const viewer = codeViewRef.current?.getInstance();
+              const renderedItem = viewer
+                ?.getRenderedItems()
+                .find((candidate) => candidate.id === item.id);
+              if (renderedItem?.type === 'diff') {
+                renderedItem.instance.expandHunk(0, 'both', 0);
+              }
+            }}
             onToggleCollapsed={onToggleCollapsed}
             onToggleMarkdownPreview={toggleMarkdownPreview}
             onToggleViewed={onToggleViewed}
@@ -4807,6 +4868,7 @@ export function ReviewCodeView({
       allowViewedToggle,
       canCreateFileComments,
       canEditCodeItem,
+      contextLoadStates,
       createFileComment,
       codeEditing,
       editingMarkdownSections,
