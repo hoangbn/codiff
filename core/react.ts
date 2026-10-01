@@ -11,6 +11,7 @@ export {
 export {
   ReadOnlyGeneralCommentCard,
   ReviewSurface,
+  type ReviewContentLoader,
   type ReviewCommenting,
   type ReviewMode,
   type ReviewSurfaceProps,
