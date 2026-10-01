@@ -18,6 +18,7 @@ export const statusLabel: Record<GitFileStatus, string> = {
 };
 
 export const sectionLabel: Record<DiffSection['kind'], string> = {
+  combined: 'Combined',
   commit: 'Commit',
   'pull-request': 'PR',
   staged: 'Staged',
