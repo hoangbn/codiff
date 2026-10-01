@@ -645,7 +645,6 @@ const readBranchWorkingTreeState = async (launchPath, input, options = {}) => {
         options: {
           blobCacheKeys: true,
           env: snapshot.env,
-          includeRenameSources: true,
           literalPaths: true,
           section: { kind: 'combined', ref },
           showWhitespace: options.showWhitespace,
@@ -688,7 +687,6 @@ const readBranchWorkingTreeSectionContent = async (launchPath, request) => {
         blobCacheKeys: true,
         env: snapshot.env,
         force: request.force,
-        includeRenameSources: true,
         literalPaths: true,
         section: { kind: 'combined', ref: getCombinedSectionRef(oldRef) },
         showWhitespace: request.showWhitespace,

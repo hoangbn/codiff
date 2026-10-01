@@ -23,7 +23,6 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  *   blobCacheKeys?: boolean;
  *   env?: NodeJS.ProcessEnv;
  *   force?: boolean;
- *   includeRenameSources?: boolean;
  *   literalPaths?: boolean;
  *   section?: {kind: DiffSection['kind']; ref: string};
  *   showWhitespace?: boolean;
@@ -31,18 +30,12 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  */
 
 /**
- * Combined snapshots include both rename endpoints and use literal paths;
- * historical comparisons retain their destination-only, nonliteral pathspec.
  * @param {ReadonlyArray<Pick<StatusItem, 'oldPath' | 'path'>>} items
  * @param {ComparisonOptions} options
  */
 const getPathspec = (items, options) => {
   const paths = [
-    ...new Set(
-      items.flatMap((item) =>
-        options.includeRenameSources && item.oldPath ? [item.oldPath, item.path] : [item.path],
-      ),
-    ),
+    ...new Set(items.flatMap((item) => (item.oldPath ? [item.oldPath, item.path] : [item.path]))),
   ];
   return options.literalPaths ? paths.map((path) => `:(literal)${path}`) : paths;
 };

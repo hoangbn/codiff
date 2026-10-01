@@ -1365,7 +1365,7 @@ test('readRepositoryState preserves numstat for committed paths with tabs', asyn
   });
 });
 
-test('committed comparisons preserve destination-only rename patches', async () => {
+test('committed comparisons preserve both endpoints in rename patches', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'old.txt', 'one\ntwo\nthree\nfour\n');
     await commitAll(repo, 'base');
@@ -1383,9 +1383,12 @@ test('committed comparisons preserve destination-only rename patches', async () 
       base,
       head,
       '--',
+      'old.txt',
       'new.txt',
     ]);
-    expect(expectedPatch).toContain('new file mode');
+    expect(expectedPatch).toContain('similarity index 100%');
+    expect(expectedPatch).toContain('rename from old.txt');
+    expect(expectedPatch).not.toContain('@@');
     const sources: ReadonlyArray<ReviewSource> = [
       { ref: head, type: 'commit' },
       { base, head, symmetric: false, type: 'range' },
