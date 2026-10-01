@@ -1685,7 +1685,7 @@ process.exit(result.status ?? 1);
       if (failure === 'locked') {
         await expect(
           readRepositoryState(repo, { ref: target, type: 'branch-working-tree' }),
-        ).rejects.toThrow('File exists');
+        ).rejects.toThrow('.lock');
         expect(readFileSync(join(repo, '.git/index'))).toEqual(index);
         expect(await git(repo, ['show-ref'])).toBe(refs);
         return;
@@ -1845,7 +1845,11 @@ test('branch+ disposes its snapshot and leaves the repository untouched when a r
     const index = readFileSync(join(repo, '.git/index'));
     const objects = await git(repo, ['count-objects', '-v']);
     await using temporaryRoot = await createTemporaryDirectory('codiff-branch-plus-tmp-');
-    using _environment = createTemporaryEnvironment({ TMPDIR: temporaryRoot.path });
+    using _environment = createTemporaryEnvironment({
+      TEMP: temporaryRoot.path,
+      TMP: temporaryRoot.path,
+      TMPDIR: temporaryRoot.path,
+    });
 
     await expect(
       readDiffSectionContent(repo, {

@@ -643,6 +643,7 @@ const readBranchWorkingTreeState = async (launchPath, input, options = {}) => {
         newRef: snapshot.tree,
         oldRef,
         options: {
+          blobCacheKeys: true,
           env: snapshot.env,
           includeRenameSources: true,
           literalPaths: true,
@@ -684,6 +685,7 @@ const readBranchWorkingTreeSectionContent = async (launchPath, request) => {
       request.path,
       'branch',
       {
+        blobCacheKeys: true,
         env: snapshot.env,
         force: request.force,
         includeRenameSources: true,

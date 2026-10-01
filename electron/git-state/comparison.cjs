@@ -20,6 +20,7 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  * @typedef {import('./common.cjs').StatusItem} StatusItem
  * @typedef {Pick<StatusItem, 'oldPath' | 'path' | 'status'>} ComparisonItem
  * @typedef {{
+ *   blobCacheKeys?: boolean;
  *   env?: NodeJS.ProcessEnv;
  *   force?: boolean;
  *   includeRenameSources?: boolean;
@@ -30,8 +31,8 @@ const { createEmptyFileContent, readGitFiles } = require('./git-files.cjs');
  */
 
 /**
- * Combined snapshots include both rename endpoints; historical comparisons
- * retain their destination-only pathspec.
+ * Combined snapshots include both rename endpoints and use literal paths;
+ * historical comparisons retain their destination-only, nonliteral pathspec.
  * @param {ReadonlyArray<Pick<StatusItem, 'oldPath' | 'path'>>} items
  * @param {ComparisonOptions} options
  */
@@ -157,7 +158,7 @@ const createComparisonFile = (ref, item, oldFile, newFile, patch, kind = 'commit
         summary.summary?.reason || ''
       }\n${summary.summary?.fingerprint || ''}\n${patch}\n${oldFile.file?.contents || ''}\n${
         newFile.file?.contents || ''
-      }\n${oldFile.fingerprint || ''}\n${newFile.fingerprint || ''}`,
+      }${kind === 'combined' ? `\n${oldFile.fingerprint || ''}\n${newFile.fingerprint || ''}` : ''}`,
     ),
     oldPath: item.oldPath,
     path: item.path,
@@ -214,7 +215,7 @@ const getOldComparisonFile = (oldFiles, oldRef, item) =>
  */
 const readComparisonFiles = async (repoRoot, newRef, oldRef, status, options) => {
   const readOptions = {
-    blobCacheKeys: Boolean(options.section),
+    blobCacheKeys: options.blobCacheKeys,
     env: options.env,
     force: options.force,
   };

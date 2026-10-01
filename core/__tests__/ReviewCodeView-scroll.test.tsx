@@ -176,7 +176,7 @@ const createCombinedFile = (contents: string, fingerprint: string) => {
     ...file,
     sections: file.sections.map((section) => ({
       ...section,
-      id: 'plan.md:combined',
+      id: 'plan.md:combined:1111111111111111111111111111111111111111',
       kind: 'combined' as const,
     })),
   } satisfies ChangedFile;
