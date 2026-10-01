@@ -1533,6 +1533,53 @@ test('readRepositoryState reports missing branch refs clearly', async () => {
   });
 });
 
+test.each(['commit', 'rebase'])(
+  'branch+ refreshes resolved endpoints after a %s while lazy reads retain their base',
+  async (operation) => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'file.txt', 'base\n');
+      await writeRepoFile(repo, 'target.txt', 'base\n');
+      await commitAll(repo, 'base');
+      const target = (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+      await git(repo, ['checkout', '-b', 'feature']);
+      await writeRepoFile(repo, 'file.txt', 'feature one\n');
+      await commitAll(repo, 'feature one');
+      const initial = await readRepositoryState(repo, { ref: target, type: 'branch-working-tree' });
+      const source = initial.source as Extract<ReviewSource, { type: 'branch-working-tree' }>;
+
+      if (operation === 'commit') {
+        await writeRepoFile(repo, 'file.txt', 'feature two\n');
+        await commitAll(repo, 'feature two');
+      } else {
+        await git(repo, ['checkout', target]);
+        await writeRepoFile(repo, 'target.txt', 'target advance\n');
+        await commitAll(repo, 'target advance');
+        await git(repo, ['checkout', 'feature']);
+        await git(repo, ['rebase', target]);
+      }
+
+      const lazy = await readDiffSectionContent(repo, {
+        kind: 'combined',
+        path: 'file.txt',
+        source,
+      });
+      expect(lazy.id).toBe(initial.files[0].sections[0].id);
+      const refreshed = await readRepositoryState(repo, source);
+      expect(refreshed.source).toMatchObject({
+        baseRef: (await git(repo, ['merge-base', target, 'HEAD'])).trim(),
+        headRef: (await git(repo, ['rev-parse', 'HEAD'])).trim(),
+        ref: target,
+        type: 'branch-working-tree',
+      });
+      expect(refreshed.files.map((file) => file.path)).toEqual(['file.txt']);
+      const history = await listRepositoryHistory(repo, 10, refreshed.source);
+      expect(history.entries.map((entry) => (entry as { subject: string }).subject)).toEqual(
+        operation === 'commit' ? ['feature two', 'feature one'] : ['feature one'],
+      );
+    });
+  },
+);
+
 test('branch+ matches staging and committing all changes without changing the repository', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');
