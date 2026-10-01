@@ -50,7 +50,9 @@ const withBranchSnapshot = async (repoRoot, run) => {
     };
     await fs.mkdir(env.GIT_OBJECT_DIRECTORY);
     try {
+      const indexStat = await fs.stat(indexPath);
       await fs.copyFile(indexPath, env.GIT_INDEX_FILE);
+      await fs.utimes(env.GIT_INDEX_FILE, indexStat.atime, Math.floor(indexStat.mtimeMs / 1000));
     } catch (error) {
       if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
         throw error;
