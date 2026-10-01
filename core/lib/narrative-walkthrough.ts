@@ -13,9 +13,11 @@ import type {
 import { getDiffLineCount, getVisibleDiffSections } from './diff.ts';
 import {
   filterPatchToHunkIds,
+  getHunkOrdinal,
   getSectionWalkthroughHunks,
   isSyntheticWalkthroughHunk,
 } from './narrative-walkthrough-diff.js';
+import { getWalkthroughReviewIdentity } from './review-identity.ts';
 
 type NarrativeLineCount = {
   added: number;
@@ -188,6 +190,7 @@ const getSectionHunkIds = (file: ChangedFile, section: DiffSection): ReadonlyArr
   getSectionWalkthroughHunks(file, section).map((hunk: { id: string }) => hunk.id);
 
 type UncoveredWalkthroughSection = {
+  hunkIds: ReadonlyArray<string>;
   identity: string;
   section: DiffSection;
 };
@@ -205,7 +208,9 @@ const getUncoveredWalkthroughSection = (
 
   const hunkIds = getSectionHunkIds(file, section);
   if (hunkIds.length === 0) {
-    return coveredSectionIds.has(section.id) ? null : { identity: section.id, section };
+    return coveredSectionIds.has(section.id)
+      ? null
+      : { hunkIds: [section.id], identity: section.id, section };
   }
 
   const uncoveredHunkIds = hunkIds.filter((hunkId) => !coveredHunkIds.has(hunkId));
@@ -215,11 +220,32 @@ const getUncoveredWalkthroughSection = (
 
   const identity = `${section.id}:${uncoveredHunkIds.join(',')}`;
   if (uncoveredHunkIds.length === hunkIds.length) {
-    return { identity, section };
+    return { hunkIds: uncoveredHunkIds, identity, section };
   }
 
   const patch = filterPatchToHunkIds(section.patch, section.id, uncoveredHunkIds);
-  return patch ? { identity, section: { ...section, patch } } : null;
+  return patch ? { hunkIds: uncoveredHunkIds, identity, section: { ...section, patch } } : null;
+};
+
+export const getUncoveredWalkthroughReviewIdentity = (
+  file: ChangedFile,
+  view: WalkthroughView,
+  showWhitespace: boolean,
+) => {
+  const coveredHunkIds = walkthroughCoveredHunkIds(view);
+  const coveredSectionIds = walkthroughCoveredSectionIds(view);
+  const coveredSyntheticSectionIds = walkthroughCoveredSyntheticSectionIds(view);
+  const hunkIds = getVisibleDiffSections(file, showWhitespace).flatMap(
+    ({ section }) =>
+      getUncoveredWalkthroughSection(
+        file,
+        section,
+        coveredHunkIds,
+        coveredSectionIds,
+        coveredSyntheticSectionIds,
+      )?.hunkIds ?? [],
+  );
+  return getWalkthroughReviewIdentity(file, hunkIds);
 };
 
 export const getUncoveredWalkthroughFiles = (
@@ -356,7 +382,7 @@ export const resolveWalkthroughHunkFile = (
 const walkthroughHunkRunKey = (item: WalkthroughHunkGroup, hunks: ReadonlyArray<WalkthroughHunk>) =>
   `${item.id}:${hunks.map((hunk) => hunk.id).join(',')}`;
 
-/** Resolve item hunks in authored order, coalescing adjacent hunks from the same file section. */
+/** Resolve authored hunk order, coalescing only forward runs within each file section. */
 export const resolveWalkthroughHunkRuns = (
   item: WalkthroughHunkGroup,
   files: ReadonlyArray<ChangedFile>,
@@ -368,10 +394,20 @@ export const resolveWalkthroughHunkRuns = (
       continue;
     }
     const previous = runs.at(-1);
+    const previousHunk = previous?.hunks.at(-1);
+    const previousOrdinal = previousHunk
+      ? getHunkOrdinal(resolved.section.id, previousHunk.id)
+      : null;
+    const ordinal = getHunkOrdinal(resolved.section.id, hunk.id);
+    // Pierre's scroll anchors assume source-order hunks within each diff item.
+    // Split backward jumps into separate runs to preserve the narrative order.
     if (
       previous &&
       previous.resolved.file.path === resolved.file.path &&
-      previous.resolved.section.id === resolved.section.id
+      previous.resolved.section.id === resolved.section.id &&
+      previousOrdinal != null &&
+      ordinal != null &&
+      previousOrdinal < ordinal
     ) {
       const hunks = [...previous.hunks, hunk];
       runs[runs.length - 1] = {

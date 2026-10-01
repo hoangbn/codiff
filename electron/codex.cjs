@@ -18,14 +18,13 @@ const {
 const CODEX_TIMEOUT_MS = 90_000;
 const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 const FALLBACK_OPENAI_MODEL = 'gpt-5.5';
-const LEGACY_OPENAI_MODEL = 'gpt-5.3-codex-spark';
 const CODEX_REASONING_EFFORT = 'low';
 const CODEX_MACOS_BLOCKED_MESSAGE =
   'macOS blocked the local Codex CLI. Update Codex CLI from the official OpenAI release, then run `codex --version` and try again.';
 const CODEX_NOT_FOUND_CODE = 'CODEX_NOT_FOUND';
 const CODEX_APP_SERVER_UNAVAILABLE_CODE = 'CODEX_APP_SERVER_UNAVAILABLE';
 const CODEX_NOT_FOUND_MESSAGE =
-  'Codex CLI was not found. Install Codex and verify `codex --version` works in Terminal. On macOS, Codiff also checks for the CLI bundled with Codex.app. If Codex is installed somewhere else, launch Codiff with `CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w`.';
+  'Codex CLI was not found. Install Codex and verify `codex --version` works in Terminal. On macOS, Codiff also checks for the CLI bundled with Codex.app or ChatGPT.app. If Codex is installed somewhere else, launch Codiff with `CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w`.';
 /**
  * @typedef {{
  *   fallbackModel?: string;
@@ -71,12 +70,13 @@ const OPENAI_MODELS = Object.freeze([
     id: FALLBACK_OPENAI_MODEL,
     label: 'Compatibility: GPT-5.5',
   },
-  {
-    id: LEGACY_OPENAI_MODEL,
-    label: 'Preview: GPT-5.3 Codex Spark',
-  },
 ]);
-const OPENAI_MODEL_IDS = new Set(OPENAI_MODELS.map((model) => model.id));
+const OPENAI_MODEL_IDS = new Set([
+  ...OPENAI_MODELS.map((model) => model.id),
+  'gpt-6-astra',
+  'gpt-6-sol',
+  'gpt-6-luna',
+]);
 const CODEX_REASONING_EFFORTS = new Set(['low', 'medium', 'high']);
 const OPENAI_MODEL_REASONING_EFFORTS = new Map([
   ['gpt-5.6-sol', 'medium'],
@@ -103,11 +103,14 @@ const getCodexInstallPaths = (platform = process.platform, home = homedir()) => 
     ? [
         '/Applications/Codex.app/Contents/Resources/codex',
         join(home, 'Applications/Codex.app/Contents/Resources/codex'),
+        '/Applications/ChatGPT.app/Contents/Resources/codex',
+        join(home, 'Applications/ChatGPT.app/Contents/Resources/codex'),
       ]
     : []),
 ];
 
-const getCodexCommand = () => {
+/** @param {ReadonlyArray<string>} [installPaths] */
+const getCodexCommand = (installPaths = getCodexInstallPaths()) => {
   const codexPath = process.env.CODIFF_CODEX_PATH?.trim();
   if (codexPath) {
     if (isExecutableFile(codexPath)) {
@@ -124,7 +127,7 @@ const getCodexCommand = () => {
     return pathCommand;
   }
 
-  for (const path of getCodexInstallPaths()) {
+  for (const path of installPaths) {
     if (isExecutableFile(path)) {
       return path;
     }
@@ -236,7 +239,9 @@ const getOpenAIModelReasoningEffort = (model, reasoningEffort) =>
 const getOpenAIModelFallbacks = (model, fallbackModel = FALLBACK_OPENAI_MODEL) => {
   const normalizedModel = normalizeOpenAIModel(model);
   const candidates = [
-    ...(normalizedModel === 'gpt-5.6-sol' || normalizedModel === 'gpt-5.6-luna'
+    ...(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-luna'].includes(
+      normalizedModel,
+    )
       ? [DEFAULT_OPENAI_MODEL]
       : []),
     normalizeOpenAIModel(fallbackModel),
@@ -821,6 +826,7 @@ module.exports = {
   DEFAULT_OPENAI_MODEL,
   FALLBACK_OPENAI_MODEL,
   getCodexCommand,
+  getCodexInstallPaths,
   isCodexNotFoundError,
   normalizeOpenAIModel,
   OPENAI_MODELS,

@@ -62,6 +62,9 @@ const getLoginShellEnvironment = () => {
 const resolveLoginShellEnvironment = (shell, timeout = RESOLUTION_TIMEOUT) =>
   new Promise((resolve) => {
     const child = spawn(shell, ['-l', '-i', '-c', ENVIRONMENT_COMMAND], {
+      // Interactive shells can take over the controlling terminal even with
+      // redirected stdio, suspending the caller on its next terminal access.
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     /** @type {Array<Buffer>} */
@@ -73,7 +76,16 @@ const resolveLoginShellEnvironment = (shell, timeout = RESOLUTION_TIMEOUT) =>
     };
     const deadline = setTimeout(() => {
       finish(child.exitCode);
-      child.kill('SIGKILL');
+      if (process.platform !== 'win32' && child.pid) {
+        try {
+          // Include descendants holding stdout open after the shell exits.
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+      } else {
+        child.kill('SIGKILL');
+      }
       child.stdout.destroy();
     }, timeout);
 

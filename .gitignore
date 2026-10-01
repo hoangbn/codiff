@@ -1,11 +1,13 @@
 .enum_manifest.json
 .fate/
 .void/
+.vitest/
 .wrangler/
 **/.fate/
 **/.void/
 **/.wrangler/
 **/.dev.vars
+**/.env
 **/.env.local
 **/.env.*.local
 .cache/

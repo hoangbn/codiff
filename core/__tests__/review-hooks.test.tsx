@@ -7,6 +7,7 @@ import { expect, test, vi } from 'vite-plus/test';
 import { useResizableSidebar } from '../app/hooks/useResizableSidebar.ts';
 import { useReviewFileState } from '../app/hooks/useReviewState.ts';
 import type { ReviewIdentity } from '../lib/app-types.ts';
+import { getWalkthroughReviewIdentity } from '../lib/review-identity.ts';
 import { SIDEBAR_COLLAPSE_THRESHOLD } from '../lib/sidebar-width.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
 import { renderReact } from './helpers/react.tsx';
@@ -55,7 +56,7 @@ test('review file state keeps collapse, generated expansion, viewed state, and v
     getState().toggleCollapsed(file, true, reviewIdentity.key);
   });
   expect(getState().collapsed.has(reviewIdentity.key)).toBe(false);
-  expect(getState().expandedGenerated.has(reviewIdentity.key)).toBe(true);
+  expect(getState().expandedReviewKeys.has(reviewIdentity.key)).toBe(true);
   expect(getState().itemVersionByKey[reviewIdentity.key]).toBe(1);
   await act(async () => {
     getState().toggleViewed(file, false, reviewIdentity);
@@ -64,7 +65,7 @@ test('review file state keeps collapse, generated expansion, viewed state, and v
     [reviewIdentity.key]: reviewIdentity.fingerprint,
   });
   expect(getState().collapsed.has(reviewIdentity.key)).toBe(true);
-  expect(getState().expandedGenerated.has(reviewIdentity.key)).toBe(false);
+  expect(getState().expandedReviewKeys.has(reviewIdentity.key)).toBe(false);
   expect(getState().itemVersionByKey[reviewIdentity.key]).toBe(2);
   expect(onViewedChange).toHaveBeenLastCalledWith({
     [reviewIdentity.key]: reviewIdentity.fingerprint,
@@ -82,15 +83,18 @@ function ResizableSidebarHarness({
   collapseThreshold,
   onCollapse,
   onWidthCommit,
+  position,
 }: {
   collapseThreshold?: number;
   onCollapse?: () => void;
   onWidthCommit: (width: number) => void;
+  position: 'left' | 'right';
 }) {
   const { resizeSidebar, sidebarWidth } = useResizableSidebar({
     collapseThreshold,
     onCollapse,
     onWidthCommit,
+    position,
     readWidth: () => 292,
   });
   return (
@@ -112,10 +116,10 @@ const prepareResizeHandle = (container: HTMLElement) => {
       bottom: 0,
       height: 0,
       left: 20,
-      right: 0,
+      right: 820,
       toJSON: () => ({}),
       top: 0,
-      width: 0,
+      width: 800,
       x: 20,
       y: 0,
     }) as DOMRect;
@@ -124,43 +128,77 @@ const prepareResizeHandle = (container: HTMLElement) => {
   return handle;
 };
 
-test('resizable sidebars clamp drag widths and commit them on release', async () => {
-  const onWidthCommit = vi.fn();
-  await using view = await renderReact(<ResizableSidebarHarness onWidthCommit={onWidthCommit} />);
-
-  const handle = prepareResizeHandle(view.container);
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 370 }));
-  });
-  expect(handle.dataset.width).toBe('350');
-  expect(onWidthCommit).not.toHaveBeenCalled();
-  await act(async () => {
-    handle.dispatchEvent(new MouseEvent('pointerup'));
-  });
-  expect(onWidthCommit).toHaveBeenCalledWith(350);
-  expect(handle.classList.contains('dragging')).toBe(false);
-  expect(document.body.style.cursor).toBe('');
-});
-
-test('resizable sidebars can collapse during a drag without committing a width', async () => {
-  const onCollapse = vi.fn();
+test.each([
+  { clientX: 370, expectedWidth: 350, position: 'left' },
+  { clientX: 470, expectedWidth: 350, position: 'right' },
+] as const)('$position resizable sidebars measure and commit drag widths', async (testCase) => {
   const onWidthCommit = vi.fn();
   await using view = await renderReact(
-    <ResizableSidebarHarness
-      collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
-      onCollapse={onCollapse}
-      onWidthCommit={onWidthCommit}
-    />,
+    <ResizableSidebarHarness onWidthCommit={onWidthCommit} position={testCase.position} />,
   );
 
   const handle = prepareResizeHandle(view.container);
   await act(async () => {
     handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: 50 }));
+    handle.dispatchEvent(new MouseEvent('pointermove', { clientX: testCase.clientX }));
   });
-  expect(onCollapse).toHaveBeenCalledOnce();
+  expect(handle.dataset.width).toBe(String(testCase.expectedWidth));
   expect(onWidthCommit).not.toHaveBeenCalled();
-  expect(handle.dataset.width).toBe('292');
+  await act(async () => {
+    handle.dispatchEvent(new MouseEvent('pointerup'));
+  });
+  expect(onWidthCommit).toHaveBeenCalledWith(testCase.expectedWidth);
   expect(handle.classList.contains('dragging')).toBe(false);
+  expect(document.body.style.cursor).toBe('');
+});
+
+test.each([
+  { clientX: 50, position: 'left' },
+  { clientX: 750, position: 'right' },
+] as const)(
+  '$position resizable sidebars collapse during a drag without committing',
+  async (testCase) => {
+    const onCollapse = vi.fn();
+    const onWidthCommit = vi.fn();
+    await using view = await renderReact(
+      <ResizableSidebarHarness
+        collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
+        onCollapse={onCollapse}
+        onWidthCommit={onWidthCommit}
+        position={testCase.position}
+      />,
+    );
+
+    const handle = prepareResizeHandle(view.container);
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      handle.dispatchEvent(new MouseEvent('pointermove', { clientX: testCase.clientX }));
+    });
+    expect(onCollapse).toHaveBeenCalledOnce();
+    expect(onWidthCommit).not.toHaveBeenCalled();
+    expect(handle.dataset.width).toBe('292');
+    expect(handle.classList.contains('dragging')).toBe(false);
+  },
+);
+
+test('viewing one walkthrough block preserves manual collapse choices for sibling blocks', async () => {
+  const file = createChangedFile('src/shared.ts', {
+    patch: '@@ -1 +1 @@\n-old\n+new\n@@ -10 +10 @@\n-before\n+after\n',
+  });
+  const first = getWalkthroughReviewIdentity(file, [`${file.sections[0].id}:h1`]);
+  const second = getWalkthroughReviewIdentity(file, [`${file.sections[0].id}:h2`]);
+  let state: ReviewFileState;
+  await using _view = await renderReact(
+    <ReviewFileStateHarness
+      onState={(next) => {
+        state = next;
+      }}
+    />,
+  );
+  await act(async () => state.toggleCollapsed(file, false, first.key));
+  await act(async () => state.toggleViewed(file, false, second));
+  expect(state!.collapsed.has(first.key)).toBe(true);
+  await act(async () => state.toggleCollapsed(file, true, first.key));
+  await act(async () => state.toggleViewed(file, true, second));
+  expect(state!.expandedReviewKeys.has(first.key)).toBe(true);
 });

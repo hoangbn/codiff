@@ -51,7 +51,7 @@ export type ReviewAnnotationMetadata =
   | WalkthroughHeaderAnnotationMetadata;
 
 export type CodeViewInstance = NonNullable<
-  ReturnType<CodeViewHandle<ReviewAnnotationMetadata>['getInstance']>
+  ReturnType<CodeViewHandle<ReviewAnnotationMetadata, undefined>['getInstance']>
 >;
 
 export type DiffSearchMatch = {
@@ -72,11 +72,17 @@ export type ReviewScrollBehavior = 'instant' | 'smooth';
 export type ReviewScrollTarget = {
   behavior?: ReviewScrollBehavior;
   blockId?: string;
+  commentId?: string;
   path?: string;
   request: number;
 };
 
 export type ReviewIdentity = {
+  coverage?: {
+    allHunkIds: ReadonlyArray<string>;
+    file: { fingerprint: string; key: string };
+    hunkIds: ReadonlyArray<string>;
+  };
   fingerprint: string;
   key: string;
 };
@@ -135,7 +141,7 @@ export type WalkthroughNote = {
 
 export type SourceSession = {
   collapsed: Set<string>;
-  expandedGenerated: Set<string>;
+  expandedReviewKeys: Set<string>;
   /** Populated by a generated or pre-authored narrative walkthrough document. */
   narrativeWalkthrough?: NarrativeWalkthrough | null;
   reviewComments: ReadonlyArray<ReviewComment>;

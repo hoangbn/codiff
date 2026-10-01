@@ -22,8 +22,10 @@ choose.
   `stops`. For one- or two-file diffs, prefer one chapter unless there are clearly separate review
   phases. Keep `title` to 1-2 short words and at most 16 characters, e.g. `"UI"`, `"CLI"`,
   `"Tests"`, `"Docs"`, `"Runtime"`, `"Cleanup"`.
-- **`chapters[].stops[]`** — the main review path. Use 1-2 stops for tiny changes, 1-3 stops
-  for focused small changes, 5-9 for medium changes, and 7-12 for large changes. Never exceed 14. A stop should represent one review idea and can include up to 14 ordered `hunkIds`.
+- **`chapters[].stops[]`** — the main review path. Use at most 2 stops for tiny changes,
+  usually at most 3 for focused small changes, and at most 5 for compact multi-part changes.
+  Treat these as ceilings, not targets, and use fewer whenever possible. Broader changes can use
+  5-9 stops, but never exceed 14. A stop should represent one review idea and can include up to 14 ordered `hunkIds`.
   Give every stop a concise semantic `title` in roughly 2-6 words, such as
   `"Prevent duplicate payments"` or `"Preserve offline drafts"`. Never use a filename or path
   as the stop title.
@@ -56,6 +58,8 @@ choose.
 - Order stops by review leverage, not by file path.
 - Similar same-file hunks should usually be one stop with multiple `hunkIds`, not separate
   chapters or stops. Split them only when the reviewer needs different prose for different ideas.
+- A Git hunk boundary is not a walkthrough boundary. Group hunks that only make sense together,
+  and never create a stop whose explanation depends primarily on code assigned to another stop.
 - Do not make one stop per file for broad changes. Group hunks that implement the same idea in
   one stop.
 - Never split a generated-like file across stops or support items. Use its single synthetic hunk id.
@@ -77,13 +81,19 @@ The `<scope>` segment depends on which diff you anchored against:
 
 - `staged` — the staged diff (`git diff --staged`).
 - `unstaged` — the working-tree diff (`git diff`).
+- `combined:<merge-base SHA>` — the cumulative `branch+` / “All changes vs main”
+  diff, including the default branch target (`codiff <branch>`). Use the full
+  40-character SHA from `git merge-base <branch> HEAD`, not `HEAD` or the target
+  branch's tip. Each file has one base-to-current section; ordinary local edits
+  preserve its scope id. For example: `src/app.ts:combined:<merge-base SHA>:h1`.
 - `pull-request:<number>` — a pull request.
-- `<commit SHA>` — every commit-like target: a single commit, a branch comparison, or a
-  ref range. This is always the **full 40-character SHA of the diff's new (head) side**,
+- `<commit SHA>` — historical targets: a single commit, a committed-only branch
+  comparison, or a ref range. This is always the **full 40-character SHA of the diff's new (head) side**,
   resolved with `git rev-parse` — never a ref name or a `branch:`/`range:` prefix:
-  - single commit (`codiff <ref>`): the resolved commit SHA.
-  - branch comparison (`codiff <branch>` — current branch vs `<branch>`): the resolved
-    **`HEAD`** SHA, _not_ `<branch>`.
+  - single commit (`codiff <commit-ref>`): the resolved commit SHA.
+  - committed-only in-app branch comparison (`branch-diff` source): the resolved
+    **`HEAD`** SHA, _not_ `<branch>`. `codiff <branch>` always uses the combined
+    scope, even when the working tree is clean.
   - ref range (`codiff base..head` or `base...head`): the resolved SHA of `head`.
 
 ## Schema

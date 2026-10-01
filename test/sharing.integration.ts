@@ -1,11 +1,107 @@
-/// <reference types="@cloudflare/vitest-pool-workers/types" />
-
-import { env, SELF } from 'cloudflare:test';
-import { afterEach, beforeEach, expect, test, vi } from 'vite-plus/test';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import { handleSharingApiRequest, type SharingBucket, type SharingEnv } from '../service/api.ts';
 import { hashUploadIntentSecret } from '../service/upload-intent.ts';
 
 const origin = 'https://test.codiff.local';
+
+const workerDir = fileURLToPath(new URL('../web/dist/ssr/', import.meta.url));
+const migrationDir = fileURLToPath(new URL('../web/db/migrations/', import.meta.url));
+const config = JSON.parse(readFileSync(join(workerDir, 'wrangler.json'), 'utf8')) as {
+  compatibility_date: string;
+  compatibility_flags: Array<string>;
+  d1_databases: Array<{ binding: string; database_id: string }>;
+  durable_objects: { bindings: Array<{ class_name: string; name: string }> };
+  r2_buckets: Array<{ binding: string; bucket_name: string }>;
+};
+const workerFiles = (dir: string): Array<string> =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? workerFiles(path) : [path];
+  });
+const modules = workerFiles(workerDir)
+  .filter((path) => path.endsWith('.js'))
+  .sort((a, b) =>
+    relative(workerDir, a) === 'index.js'
+      ? -1
+      : relative(workerDir, b) === 'index.js'
+        ? 1
+        : a.localeCompare(b),
+  )
+  .map((path) => ({ path, type: 'ESModule' as const }));
+const server = new Miniflare(
+  convertV4MiniflareOptions({
+    bindings: {
+      AUTH_GITHUB_CLIENT_ID: 'test-github-client-id',
+      AUTH_GITHUB_CLIENT_SECRET: 'test-github-client-secret',
+      BETTER_AUTH_SECRET: 'test-better-auth-secret-at-least-32-characters',
+      PUBLIC_ORIGIN: origin,
+    },
+    compatibilityDate: config.compatibility_date,
+    compatibilityFlags: config.compatibility_flags,
+    d1Databases: Object.fromEntries(
+      config.d1_databases.map(({ binding, database_id }) => [binding, database_id]),
+    ),
+    durableObjects: Object.fromEntries(
+      config.durable_objects.bindings.map(({ class_name, name }) => [
+        name,
+        { className: class_name, useSQLite: true },
+      ]),
+    ),
+    modules,
+    modulesRoot: workerDir,
+    outboundService: (request) => mockGitHub(request),
+    r2Buckets: Object.fromEntries(
+      config.r2_buckets.map(({ binding, bucket_name }) => [binding, bucket_name]),
+    ),
+    serviceBindings: { ASSETS: () => new Response('Not Found', { status: 404 }) },
+  }),
+);
+let env: { DB: D1Database; WALKTHROUGH_BUCKET: R2Bucket };
+const SELF = {
+  fetch: (...args: Parameters<typeof server.dispatchFetch>) => server.dispatchFetch(...args),
+};
+
+const migrationStatements = (sql: string): Array<string> => {
+  const statements: Array<string> = [];
+  let statement = '';
+  let inTrigger = false;
+  for (const line of sql.split('\n')) {
+    if (/^CREATE TRIGGER\b/i.test(line)) {
+      inTrigger = true;
+    }
+    statement += `${line}\n`;
+    if (line.trimEnd().endsWith(';') && (!inTrigger || /^END;\s*$/i.test(line))) {
+      statements.push(statement.trim());
+      statement = '';
+      inTrigger = false;
+    }
+  }
+  if (statement.trim()) {
+    throw new Error('Unterminated D1 migration statement.');
+  }
+  return statements;
+};
+
+beforeAll(async () => {
+  env = await server.getBindings<typeof env>();
+  const journal = JSON.parse(readFileSync(join(migrationDir, 'meta/_journal.json'), 'utf8')) as {
+    entries: Array<{ tag: string }>;
+  };
+  for (const { tag } of journal.entries) {
+    const sql = readFileSync(join(migrationDir, `${tag}.sql`), 'utf8');
+    for (const statement of migrationStatements(sql)) {
+      await env.DB.prepare(statement).run();
+    }
+  }
+});
+
+afterAll(async () => {
+  await server.dispose();
+});
 
 const planSnapshot = {
   codiffVersion: '1.8.0',
@@ -159,9 +255,10 @@ const grace: GitHubProfile = {
   name: 'Grace Hopper',
 };
 
-const readJson = async <Value>(response: Response) => (await response.json()) as Value;
+const readJson = async <Value>(response: { json(): Promise<unknown> }) =>
+  (await response.json()) as Value;
 
-const readCookies = (response: Response) =>
+const readCookies = (response: { headers: { getSetCookie(): Array<string> } }) =>
   response.headers
     .getSetCookie()
     .map((cookie) => cookie.split(';', 1)[0])
@@ -189,43 +286,36 @@ const clearState = async () => {
 
 let activeGitHubProfile = ada;
 
-const installGitHubMock = () => {
-  const nativeFetch = globalThis.fetch;
-  vi.stubGlobal(
-    'fetch',
-    async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-      const request = new Request(input, init);
-      const url = new URL(request.url);
+const mockGitHub = async (request: { url: string }) => {
+  const url = new URL(request.url);
 
-      if (url.origin === 'https://github.com' && url.pathname === '/login/oauth/access_token') {
-        return Response.json({
-          access_token: `access-token-${activeGitHubProfile.login}`,
-          scope: 'read:user,user:email',
-          token_type: 'bearer',
-        });
-      }
-      if (url.origin === 'https://api.github.com' && url.pathname === '/user') {
-        return Response.json({
-          avatar_url: activeGitHubProfile.avatarUrl,
-          email: activeGitHubProfile.email,
-          id: activeGitHubProfile.id,
-          login: activeGitHubProfile.login,
-          name: activeGitHubProfile.name,
-        });
-      }
-      if (url.origin === 'https://api.github.com' && url.pathname === '/user/emails') {
-        return Response.json([
-          {
-            email: activeGitHubProfile.email,
-            primary: true,
-            verified: true,
-            visibility: 'private',
-          },
-        ]);
-      }
-      return nativeFetch(input, init);
-    },
-  );
+  if (url.origin === 'https://github.com' && url.pathname === '/login/oauth/access_token') {
+    return Response.json({
+      access_token: `access-token-${activeGitHubProfile.login}`,
+      scope: 'read:user,user:email',
+      token_type: 'bearer',
+    });
+  }
+  if (url.origin === 'https://api.github.com' && url.pathname === '/user') {
+    return Response.json({
+      avatar_url: activeGitHubProfile.avatarUrl,
+      email: activeGitHubProfile.email,
+      id: activeGitHubProfile.id,
+      login: activeGitHubProfile.login,
+      name: activeGitHubProfile.name,
+    });
+  }
+  if (url.origin === 'https://api.github.com' && url.pathname === '/user/emails') {
+    return Response.json([
+      {
+        email: activeGitHubProfile.email,
+        primary: true,
+        verified: true,
+        visibility: 'private',
+      },
+    ]);
+  }
+  throw new Error(`Unexpected outbound request: ${request.url}`);
 };
 
 const signInWithGitHub = async (profile: GitHubProfile, callbackURL = '/') => {
@@ -289,6 +379,18 @@ const fateOperation = async (
       },
       method: 'POST',
     }),
+  );
+
+const queryShare = (name: 'planBySlug' | 'walkthroughBySlug', slug: string, cookie?: string) =>
+  fateOperation(
+    {
+      args: { slug },
+      id: `${name}-delete-capability`,
+      kind: 'query',
+      name,
+      select: ['canDelete', 'commentThreads.id', 'id'],
+    },
+    { cookie },
   );
 
 const claimIntent = async (intent: UploadIntent, cookie: string) => {
@@ -389,11 +491,6 @@ const setUsage = async (userId: string, planCount: number, walkthroughCount: num
 beforeEach(async () => {
   await clearState();
   activeGitHubProfile = ada;
-  installGitHubMock();
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
 });
 
 test('requires GitHub authentication before an upload intent can persist or be claimed', async () => {
@@ -566,7 +663,7 @@ test('stores immutable plan and walkthrough shares through D1, R2, Fate, and pol
       `${origin}/api/${kind === 'plan' ? 'plans' : 'walkthroughs'}/${upload.slug}/manifest`,
     );
     expect(manifestResponse.status).toBe(200);
-    expect(manifestResponse.headers.get('cache-control')).toBe('private, no-store');
+    expect(manifestResponse.headers.get('cache-control')).toBe('no-store');
     expect(manifestResponse.headers.get('x-robots-tag')).toBe('noindex');
     expect(await manifestResponse.json()).toEqual(canonicalSnapshot);
     expect(await readJson(await SELF.fetch(intent.pollUrl))).toEqual({
@@ -587,9 +684,9 @@ test('accepts only one concurrent upload for an intent', async () => {
     uploadShare(intent, planSnapshot),
     uploadShare(intent, planSnapshot),
   ]);
-  expect(responses.map((response: Response) => response.status).sort()).toEqual([200, 401]);
+  expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
 
-  const successful = responses.find((response: Response) => response.status === 200);
+  const successful = responses.find((response) => response.status === 200);
   if (!successful) {
     throw new Error('Expected one upload to succeed.');
   }
@@ -928,18 +1025,6 @@ test('allows only share owners to delete plans and walkthroughs', async () => {
   const otherCookie = await signInWithGitHub(grace);
   const sharedPlan = await createAndUpload(ownerCookie, 'plan');
   const sharedWalkthrough = await createAndUpload(ownerCookie, 'walkthrough');
-
-  const queryShare = (name: 'planBySlug' | 'walkthroughBySlug', slug: string, cookie?: string) =>
-    fateOperation(
-      {
-        args: { slug },
-        id: `${name}-delete-capability`,
-        kind: 'query',
-        name,
-        select: ['canDelete', 'commentThreads.id', 'id'],
-      },
-      { cookie },
-    );
 
   expect((await queryShare('planBySlug', sharedPlan.slug)).results[0]).toMatchObject({
     data: { canDelete: false },

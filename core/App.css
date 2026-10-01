@@ -18,7 +18,9 @@
     src: url('./fonts/firacode/FiraCode-SemiBold.woff2') format('woff2');
   }
 
-  :root {
+  :root,
+  .share-shell,
+  .shared-plan-shell {
     --app-bg: #f8f8f6;
     --code-bg: #ffffff;
     --codiff-font-mono: 'Fira Code', monospace;
@@ -50,7 +52,9 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root,
+    .share-shell,
+    .shared-plan-shell {
       --app-bg: #141414;
       --code-bg: #1c1c1c;
       --codiff-link: var(--tree-selection-focus);
@@ -713,6 +717,10 @@ html[data-codiff-platform='darwin'] .workspace-top-bar {
   display: none;
 }
 
+.app-shell.sidebar-collapsed > .review {
+  grid-column: 1;
+}
+
 .review-top-bar {
   display: grid;
   gap: 12px;
@@ -812,6 +820,19 @@ html[data-codiff-platform='darwin'] .workspace-top-bar {
   white-space: nowrap;
 }
 
+@supports (text-box: trim-both cap alphabetic) {
+  .review-top-bar-repository-head,
+  .review-top-bar-repository-tail {
+    /* Keep accents and descenders inside the ellipsis clipping area. */
+    padding-block: 0.5em;
+    text-box: trim-both cap alphabetic;
+  }
+
+  .review-top-bar-source-label {
+    text-box: trim-both cap alphabetic;
+  }
+}
+
 .review-top-bar-branch {
   align-items: center;
   border-radius: 14px;
@@ -907,7 +928,7 @@ a.review-top-bar-source:focus-visible {
   corner-shape: squircle;
   cursor: pointer;
   display: inline-flex;
-  font: 600 11px/1 var(--font-sans);
+  font: 600 11px/1.35 var(--font-sans);
   gap: 5px;
   height: 24px;
   justify-content: center;
@@ -923,42 +944,7 @@ a.review-top-bar-source:focus-visible {
 
 .review-mode-control button[aria-selected='true'] {
   background: var(--hover-wash);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
   color: var(--sidebar-text);
-}
-
-.sidebar .review-mode-control {
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--sidebar-border);
-  border-radius: 0;
-  corner-shape: initial;
-  display: flex;
-  gap: 4px;
-  height: 38px;
-  padding: 6px 8px;
-  width: 100%;
-}
-
-.sidebar .review-mode-control button {
-  flex: 1 1 0;
-  height: 26px;
-  overflow: hidden;
-  padding: 0 6px;
-}
-
-.sidebar .review-mode-control button > svg {
-  flex: none;
-}
-
-@container sidebar (max-width: 200px) {
-  .sidebar .review-mode-control button {
-    padding: 0 4px;
-  }
-
-  .sidebar .review-mode-label {
-    display: none;
-  }
 }
 
 .review-mode-label {
@@ -1025,10 +1011,27 @@ a.review-top-bar-source:focus-visible {
   z-index: 21;
 }
 
-.app-shell > .sidebar,
-.app-shell > .sidebar-resizer,
-.app-shell > .review {
+.app-shell > .sidebar {
+  grid-column: 1;
   grid-row: 2;
+}
+
+.app-shell > .sidebar-resizer {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.app-shell > .review {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.app-shell[data-sidebar-position='right'] > .review {
+  grid-column: 1;
+}
+
+.app-shell[data-sidebar-position='right'] > .sidebar {
+  grid-column: 3;
 }
 
 .sidebar-resizer::before {
@@ -1297,6 +1300,10 @@ a.review-top-bar-source:focus-visible {
 html[data-codiff-platform='darwin'] .sidebar {
   backdrop-filter: none;
   background: var(--sidebar-vibrancy-tint);
+}
+
+.app-shell.command-bar-open > :not(.command-bar-overlay) {
+  filter: blur(4px);
 }
 
 .merge-request-nav-button {
@@ -1704,6 +1711,121 @@ html[data-codiff-platform='darwin'] .sidebar {
   will-change: scroll-position;
   width: 100%;
   padding-inline: 12px;
+}
+
+.definition-popover {
+  animation: review-submit-popover-in 120ms ease;
+  background: var(--code-bg);
+  border: 1px solid var(--file-border);
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 0.2);
+  color: var(--text);
+  max-height: 300px;
+  overflow: hidden;
+  position: fixed;
+  width: min(420px, calc(100vw - 24px));
+  z-index: 100;
+}
+
+.definition-popover-header,
+.definition-popover-location {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.definition-popover-header {
+  border-bottom: 1px solid var(--file-border);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 9px 10px 9px 12px;
+}
+
+.definition-popover-header code {
+  font-family: var(--codiff-font-mono);
+}
+
+.definition-popover-header button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  display: flex;
+  padding: 3px;
+}
+
+.definition-popover-header button:hover,
+.definition-popover-result:hover {
+  background: var(--hover-wash);
+}
+
+.definition-popover-message {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 18px 12px;
+}
+
+.definition-popover-results {
+  max-height: 252px;
+  overflow: auto;
+  padding: 5px;
+}
+
+.definition-popover-result {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  display: block;
+  padding: 7px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.definition-popover-result:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.definition-popover-result:disabled:hover {
+  background: transparent;
+}
+
+.definition-popover-location {
+  font-size: 11px;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.definition-popover-meta,
+.definition-popover-destination {
+  align-items: center;
+  display: inline-flex;
+}
+
+.definition-popover-meta {
+  color: var(--muted);
+  gap: 7px;
+}
+
+.definition-popover-destination {
+  opacity: 0.72;
+}
+
+.definition-popover-result:hover .definition-popover-destination {
+  color: var(--text);
+  opacity: 1;
+}
+
+.definition-popover-result code {
+  color: var(--muted);
+  display: block;
+  font-family: var(--codiff-font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .codiff-header-toggle.codiff-header-toggle-static {
@@ -3164,6 +3286,75 @@ diffs-container .review-comment-thread {
   min-inline-size: 0;
 }
 
+.resolved-thread-disclosure {
+  border: 1px solid var(--file-border);
+  border-radius: 6px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  overflow: clip;
+}
+
+.resolved-thread-toggle {
+  align-items: center;
+  background: rgb(127 127 127 / 0.07);
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  font: 600 12px/1.3 var(--font-sans);
+  gap: 7px;
+  inline-size: 100%;
+  min-block-size: 34px;
+  min-inline-size: 0;
+  padding: 7px 9px;
+  text-align: start;
+}
+
+.resolved-thread-toggle:hover {
+  background: rgb(127 127 127 / 0.12);
+  color: var(--text);
+}
+
+.resolved-thread-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--tree-selection-focus) inset;
+  outline: 0;
+}
+
+.resolved-thread-caret {
+  display: block;
+  flex: none;
+}
+
+.resolved-thread-label {
+  color: currentColor;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resolved-thread-count {
+  font-weight: 500;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+.resolved-thread-caret {
+  transition: transform 140ms ease;
+}
+
+.resolved-thread-disclosure.expanded .resolved-thread-caret {
+  transform: rotate(180deg);
+}
+
+.resolved-thread-content {
+  border-block-start: 1px solid var(--file-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
 .review-comment-thread-footer {
   align-items: center;
   display: flex;
@@ -3665,7 +3856,7 @@ diffs-container .review-comment-thread {
   z-index: 13;
 }
 
-.review-submit-button:not(.close) {
+.review-submit-button:is(.approve, .comment, .request-changes) {
   cursor: default;
   gap: 0;
   padding: 0;
@@ -4105,13 +4296,16 @@ diffs-container .review-comment-thread {
 .command-bar-overlay,
 .open-review-source-overlay {
   align-items: flex-start;
-  backdrop-filter: blur(4px);
   background: rgb(255 255 255 / 0.28);
   display: flex;
   inset: 0;
   justify-content: center;
   padding-top: 180px;
   position: fixed;
+}
+
+.open-review-source-overlay {
+  backdrop-filter: blur(4px);
 }
 
 .command-bar-overlay {
@@ -4149,6 +4343,7 @@ diffs-container .review-comment-thread {
   flex-direction: column;
   max-height: 400px;
   overflow: hidden;
+  padding-top: 6px;
   width: min(520px, 90vw);
 }
 
@@ -4158,11 +4353,12 @@ diffs-container .review-comment-thread {
   border-radius: 16px;
   color: var(--text);
   corner-shape: squircle;
-  font: 14px/1.35 var(--font-sans);
+  font: 13px/1.35 var(--font-sans);
   height: 34px;
-  margin: 10px;
+  margin: 4px 10px 8px;
+  min-height: 34px;
   outline: none;
-  padding: 0 12px;
+  padding: 0 10px;
   width: calc(100% - 20px);
 }
 
@@ -4307,6 +4503,19 @@ diffs-container .review-comment-thread {
 }
 
 @media (max-width: 720px) {
+  .share-shell.sidebar-auto {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .share-shell.sidebar-auto .sidebar,
+  .share-shell.sidebar-auto .sidebar-resizer {
+    display: none;
+  }
+
+  .share-shell.sidebar-auto > .review {
+    grid-column: 1;
+  }
+
   .review-top-bar-repository-slot,
   .review-top-bar-center,
   .review-top-bar-context {
@@ -4315,11 +4524,11 @@ diffs-container .review-comment-thread {
 }
 
 @media (max-width: 480px) {
-  .review-top-bar .review-mode-control button {
+  .review-mode-control button {
     padding-inline: 7px;
   }
 
-  .review-top-bar .review-mode-label {
+  .review-mode-label {
     display: none;
   }
 }

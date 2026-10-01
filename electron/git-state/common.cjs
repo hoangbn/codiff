@@ -3,7 +3,7 @@
 const { execFile, spawn } = require('node:child_process');
 const { promises: fs } = require('node:fs');
 const { createHash } = require('node:crypto');
-const { isAbsolute, join, normalize, sep } = require('node:path');
+const { isAbsolute, join, posix } = require('node:path');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
@@ -22,7 +22,7 @@ const execFileAsync = promisify(execFile);
  * @typedef {'staged' | 'unstaged'} WorkingTreeSectionKind
  * @typedef {{cacheKey: string; contents: string; name: string}} TextFile
  * @typedef {{reason: string; canLoad?: boolean; fileCount?: number; fingerprint?: string; limit?: number; loadState?: DiffSection['loadState']; size?: number}} DiffSummary
- * @typedef {{binary: boolean; file?: TextFile; fingerprint?: string; loadState?: DiffSection['loadState']; summary?: DiffSummary}} FileContentResult
+ * @typedef {{available?: boolean; binary: boolean; file?: TextFile; fingerprint?: string; loadState?: DiffSection['loadState']; summary?: DiffSummary}} FileContentResult
  * @typedef {{
  *   conflictStage?: 1 | 2 | 3;
  *   directory?: boolean;
@@ -52,21 +52,28 @@ const getGravatarHash = (email) =>
 /**
  * @param {string} repoPath
  * @param {ReadonlyArray<string>} args
- * @param {{encoding?: BufferEncoding}} [options]
+ * @param {{encoding?: BufferEncoding; env?: NodeJS.ProcessEnv}} [options]
  * @returns {Promise<string>}
  */
 const git = async (repoPath, args, options = {}) => {
   const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
     encoding: options.encoding || 'utf8',
+    env: options.env,
     maxBuffer: 1024 * 1024 * 64,
   });
   return stdout;
 };
 
-/** @param {string} repoPath @param {ReadonlyArray<string>} args @returns {Promise<Buffer>} */
-const gitBuffer = async (repoPath, args) => {
+/**
+ * @param {string} repoPath
+ * @param {ReadonlyArray<string>} args
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
+ * @returns {Promise<Buffer>}
+ */
+const gitBuffer = async (repoPath, args, options = {}) => {
   const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
     encoding: 'buffer',
+    env: options.env,
     maxBuffer: 1024 * 1024 * 64,
   });
   return stdout;
@@ -105,7 +112,7 @@ const gitBufferWithInput = (repoPath, args, input, options = {}) =>
         const error = new Error(
           Buffer.concat(stderr).toString('utf8') || `git exited with status ${code}`,
         );
-        reject(error);
+        reject(Object.assign(error, { exitCode: code }));
       }
     });
 
@@ -305,13 +312,16 @@ const validateRepositoryPath = (path) => {
     throw new Error('Invalid repository path.');
   }
 
-  const normalized = normalize(path);
-  if (normalized === '.' || normalized === '..' || normalized.startsWith(`..${sep}`)) {
+  const normalized = posix.normalize(path);
+  if (normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
     throw new Error('Invalid repository path.');
   }
 
   return normalized;
 };
+
+/** @param {string} path */
+const validateProviderPath = (path) => validateRepositoryPath(path);
 
 /** @param {string} repoRoot @param {string} path */
 const readFileStat = async (repoRoot, path) => {
@@ -322,10 +332,10 @@ const readFileStat = async (repoRoot, path) => {
   }
 };
 
-/** @param {string} repoRoot @param {string} spec */
-const getBlobSize = async (repoRoot, spec) => {
+/** @param {string} repoRoot @param {string} spec @param {NodeJS.ProcessEnv} [env] */
+const getBlobSize = async (repoRoot, spec, env) => {
   try {
-    return Number((await git(repoRoot, ['cat-file', '-s', spec])).trim());
+    return Number((await git(repoRoot, ['cat-file', '-s', spec], { env })).trim());
   } catch {
     return undefined;
   }
@@ -362,15 +372,16 @@ const bufferToTextFile = (name, buffer, cacheKey) => {
  * @param {string} repoRoot
  * @param {string} spec
  * @param {string} path
+ * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<DiffImageRevision | undefined>}
  */
-const readImageSpec = async (repoRoot, spec, path) => {
+const readImageSpec = async (repoRoot, spec, path, env) => {
   const mimeType = getImageMimeType(path);
   if (!mimeType) {
     throw new Error('Unsupported image file type.');
   }
 
-  const size = await getBlobSize(repoRoot, spec);
+  const size = await getBlobSize(repoRoot, spec, env);
   if (size == null) {
     return undefined;
   }
@@ -380,14 +391,15 @@ const readImageSpec = async (repoRoot, spec, path) => {
   }
 
   try {
-    return bufferToImageRevision(path, await gitBuffer(repoRoot, ['show', spec]));
+    return bufferToImageRevision(path, await gitBuffer(repoRoot, ['show', spec], { env }));
   } catch {
     return undefined;
   }
 };
 
-/** @param {string} repoRoot @param {string} ref @param {string} path */
-const readGitImageFile = (repoRoot, ref, path) => readImageSpec(repoRoot, `${ref}:${path}`, path);
+/** @param {string} repoRoot @param {string} ref @param {string} path @param {NodeJS.ProcessEnv} [env] */
+const readGitImageFile = (repoRoot, ref, path, env) =>
+  readImageSpec(repoRoot, `${ref}:${path}`, path, env);
 
 /** @param {string} repoRoot @param {string} path @param {1 | 2 | 3} [stage] */
 const readIndexImageFile = (repoRoot, path, stage) =>
@@ -883,5 +895,6 @@ module.exports = {
   readIndexImageFile,
   readWorkingTreeImageFile,
   summarizeContent,
+  validateProviderPath,
   validateRepositoryPath,
 };

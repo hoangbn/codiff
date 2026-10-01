@@ -1,6 +1,6 @@
 {
   "name": "@nkzw/codiff-core",
-  "version": "1.10.1",
+  "version": "1.14.0",
   "description": "A fast diff viewer.",
   "license": "MIT",
   "author": {
@@ -51,19 +51,20 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json",
+    "prepack": "vp run build"
   },
   "dependencies": {
-    "@nkzw/mdx-editor": "^0.2.2",
+    "@nkzw/mdx-editor": "^1.0.3",
     "@nkzw/use-relative-time": "^1.2.3",
     "@phosphor-icons/react": "^2.1.10",
-    "@pierre/diffs": "1.3.0-beta.9",
-    "@pierre/trees": "1.0.0-beta.5",
+    "@pierre/diffs": "1.5.1",
+    "@pierre/trees": "1.0.0-beta.6",
     "@radix-ui/react-slot": "^1.3.3",
     "class-variance-authority": "^0.7.1",
     "ghostty-web": "^0.4.0",
-    "lucide-react": "^1.26.0",
-    "valibot": "^1.4.2"
+    "lucide-react": "^1.48.0",
+    "valibot": "^1.5.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",

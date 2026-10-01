@@ -2,15 +2,24 @@
  * @vitest-environment jsdom
  */
 
-import { act, useState } from 'react';
+import { CodeView, preloadHighlighter } from '@pierre/diffs';
+import { act, useCallback, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
+import { useReviewCommentDrafts } from '../app/hooks/useReviewCommentDrafts.ts';
+import { useReviewFileState } from '../app/hooks/useReviewState.ts';
 import type { ReviewComment, ReviewIdentity } from '../lib/app-types.ts';
 import {
+  getWalkthroughReviewIdentity,
   updateReviewIdentityCollapsed,
   updateReviewIdentityViewed,
 } from '../lib/review-identity.ts';
-import type { ChangedFile, PullRequestCodeQualityFinding, ReviewSource } from '../types.ts';
+import type {
+  ChangedFile,
+  DefinitionSearchResult,
+  PullRequestCodeQualityFinding,
+  ReviewSource,
+} from '../types.ts';
 import { createChangedFile, createChangedFileWithPatch } from './helpers/fixtures.ts';
 import { renderReact, setInputValue, waitFor } from './helpers/react.tsx';
 import {
@@ -25,6 +34,7 @@ const markdownEditorMock = vi.hoisted(() => ({
   heightByAriaLabel: new Map<string, number>(),
   heightReportLimit: Number.POSITIVE_INFINITY,
   heightReports: 0,
+  loadingPaths: new Set<string>(),
 }));
 
 vi.mock('../app/components/MarkdownDocumentEditor.tsx', async () => {
@@ -32,12 +42,26 @@ vi.mock('../app/components/MarkdownDocumentEditor.tsx', async () => {
 
   return {
     RepositoryMarkdownEditor: React.forwardRef(function MockRepositoryMarkdownEditor(
-      { path }: { path: string },
+      { onHeightChange, path }: { onHeightChange?: (height: number) => void; path: string },
       ref: React.ForwardedRef<{ flush: () => Promise<boolean> }>,
     ) {
       React.useImperativeHandle(ref, () => ({
         flush: markdownEditorMock.flush,
       }));
+      const [loading, setLoading] = React.useState(() => markdownEditorMock.loadingPaths.has(path));
+      React.useEffect(() => {
+        const finishLoading = () => setLoading(markdownEditorMock.loadingPaths.has(path));
+        window.addEventListener('markdown-loaded', finishLoading);
+        return () => window.removeEventListener('markdown-loaded', finishLoading);
+      }, [path]);
+      React.useEffect(() => {
+        if (!loading) {
+          onHeightChange?.(markdownEditorMock.heightByAriaLabel.get(`Edit ${path}`) ?? 100);
+        }
+      }, [loading, onHeightChange, path]);
+      if (loading) {
+        return <div className="codiff-markdown-editor-message">Loading…</div>;
+      }
       return <div aria-label={`Edit ${path}`}>Markdown editor</div>;
     }),
   };
@@ -108,11 +132,20 @@ beforeEach(() => {
   markdownEditorMock.heightByAriaLabel.clear();
   markdownEditorMock.heightReportLimit = Number.POSITIVE_INFINITY;
   markdownEditorMock.heightReports = 0;
+  markdownEditorMock.loadingPaths.clear();
 });
 
 const getCodeViewItemVersion = (id: string) =>
   (codeViewMock.lastItems.find((item) => item.id === id) as { version?: number } | undefined)
     ?.version;
+
+const getWalkthroughHeaderNode = (blockId: string) => {
+  const index = codeViewMock.lastItems.findIndex(
+    (item) => item.id === `${blockId}:walkthrough-header`,
+  );
+  expect(index).toBeGreaterThanOrEqual(0);
+  return codeViewMock.postRenderNodes[index];
+};
 
 const createLoadedMarkdownFile = (contents: string, fingerprint: string) => {
   const file = createChangedFileWithPatch(
@@ -135,6 +168,18 @@ const createLoadedMarkdownFile = (contents: string, fingerprint: string) => {
       },
     })),
   };
+};
+
+const createCombinedFile = (contents: string, fingerprint: string) => {
+  const file = createLoadedMarkdownFile(contents, fingerprint);
+  return {
+    ...file,
+    sections: file.sections.map((section) => ({
+      ...section,
+      id: 'plan.md:combined:1111111111111111111111111111111111111111',
+      kind: 'combined' as const,
+    })),
+  } satisfies ChangedFile;
 };
 
 test('generated files are collapsed by default and can be explicitly expanded per review', async () => {
@@ -161,7 +206,7 @@ test('generated files are collapsed by default and can be explicitly expanded pe
   await view.rerender(
     <ReviewCodeViewHarness
       blocks={blocks}
-      expandedGenerated={new Set([reviewKey])}
+      expandedReviewKeys={new Set([reviewKey])}
       files={[]}
       itemVersionByKey={{ [reviewKey]: 1 }}
     />,
@@ -248,36 +293,8 @@ test('switching edited Markdown back to a diff flushes and refreshes it first', 
   expect(JSON.stringify(codeViewMock.lastItems)).toContain('# Saved');
 });
 
-test('combined branch Markdown edits only the final working-tree section', async () => {
+test('combined branch Markdown edits the single combined section and refreshes after save', async () => {
   const order: Array<string> = [];
-  const createCombinedFile = (contents: string, fingerprint: string) => {
-    const file = createLoadedMarkdownFile(contents, fingerprint);
-    const section = file.sections[0]!;
-    return {
-      ...file,
-      sections: [
-        {
-          ...section,
-          id: 'plan.md:commit',
-          kind: 'commit' as const,
-          newFile: {
-            contents: '# Committed\n',
-            name: file.path,
-          },
-          patch: 'diff --git a/plan.md b/plan.md\n@@ -1 +1 @@\n-# Original\n+# Committed\n',
-        },
-        {
-          ...section,
-          id: 'plan.md:unstaged',
-          kind: 'unstaged' as const,
-          oldFile: {
-            contents: '# Committed\n',
-            name: file.path,
-          },
-        },
-      ],
-    } satisfies ChangedFile;
-  };
   const initialFile = createCombinedFile('# Edited\n', 'plan.md:combined-initial');
   const refreshedFile = createCombinedFile('# Saved\n', 'plan.md:combined-refreshed');
   const combinedSource = {
@@ -480,6 +497,44 @@ test('scroll selection updates do not publish new item versions', async () => {
   expect(codeViewMock.postRenderNodes[1]?.classList.contains('codiff-selected-item')).toBe(true);
 });
 
+test('walkthrough stop selection updates do not publish new header item versions', async () => {
+  const firstFile = createChangedFile('src/first.ts');
+  const secondFile = createChangedFile('src/second.ts');
+  const blocks = (currentIndex: number): ReadonlyArray<ReviewDiffBlock> => [
+    {
+      file: firstFile,
+      header: <div>Stop one</div>,
+      headerSelected: currentIndex === 0,
+      id: 'walkthrough:s1',
+      itemIdPrefix: 'walkthrough:s1',
+    },
+    {
+      file: secondFile,
+      header: <div>Stop two</div>,
+      headerSelected: currentIndex === 1,
+      id: 'walkthrough:s2',
+      itemIdPrefix: 'walkthrough:s2',
+    },
+  ];
+  await using view = await renderReact(<ReviewCodeViewHarness blocks={blocks(0)} files={[]} />);
+
+  const firstVersions = codeViewMock.lastItems.map((item) => item.version);
+  expect(
+    getWalkthroughHeaderNode('walkthrough:s1')?.classList.contains('codiff-selected-item'),
+  ).toBe(true);
+  expect(
+    getWalkthroughHeaderNode('walkthrough:s2')?.classList.contains('codiff-selected-item'),
+  ).toBe(false);
+  await view.rerender(<ReviewCodeViewHarness blocks={blocks(1)} files={[]} />);
+  expect(codeViewMock.lastItems.map((item) => item.version)).toEqual(firstVersions);
+  expect(
+    getWalkthroughHeaderNode('walkthrough:s1')?.classList.contains('codiff-selected-item'),
+  ).toBe(false);
+  expect(
+    getWalkthroughHeaderNode('walkthrough:s2')?.classList.contains('codiff-selected-item'),
+  ).toBe(true);
+});
+
 test('walkthrough header chrome does not leak inline styles onto reused diff nodes', async () => {
   const file = createChangedFile('src/reused.ts');
   const headerBlock: ReviewDiffBlock = {
@@ -605,7 +660,7 @@ test('focused walkthrough blocks render only global comments visible in the focu
 test('focused walkthrough blocks keep cross-side comments when their rendered anchor is visible', async () => {
   const file = createChangedFileWithPatch(
     'src/ranged-comment.ts',
-    'diff --git a/src/ranged-comment.ts b/src/ranged-comment.ts\n@@ -8,3 +8,3 @@\n context\n-old\n+new\n',
+    'diff --git a/src/ranged-comment.ts b/src/ranged-comment.ts\n@@ -8,3 +8,3 @@\n context\n-old\n+new\n trailing context\n',
   );
   const rangedComment = {
     body: 'Cross-side comment.',
@@ -774,6 +829,176 @@ test('read-only review comments render safe details blocks', async () => {
   expect(details?.open).toBe(false);
   expect(details?.querySelector('summary')?.textContent).toBe('Review rationale');
   expect(view.container.textContent).toContain('AI Code Reviewer');
+});
+
+test('resolved review threads collapse inline, expand when focused, and can be reopened', async () => {
+  const file = createChangedFile('src/resolved.ts');
+  const comments = [
+    {
+      author: { login: 'reviewer' },
+      body: 'Please keep this explicit.',
+      canResolveThread: true,
+      filePath: file.path,
+      id: 'gitlab:99',
+      isReadOnly: true,
+      isThreadResolved: true,
+      lineNumber: 1,
+      sectionId: file.sections[0].id,
+      side: 'additions',
+      threadId: 'discussion-1',
+    },
+    {
+      author: { login: 'author' },
+      body: 'Resolved in the latest update.',
+      canResolveThread: true,
+      filePath: file.path,
+      id: 'gitlab:103',
+      isReadOnly: true,
+      isThreadResolved: true,
+      lineNumber: 1,
+      sectionId: file.sections[0].id,
+      side: 'additions',
+      threadId: 'discussion-1',
+    },
+  ] satisfies ReadonlyArray<ReviewComment>;
+  let finishResolve: (() => void) | null = null;
+  const onResolveThread = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishResolve = resolve;
+      }),
+  );
+  await using view = await renderReact(
+    <ReviewCodeViewHarness
+      comments={comments}
+      files={[file]}
+      onResolveThread={onResolveThread}
+      supportsReviewCommentActions
+    />,
+  );
+
+  const toggle = () => view.container.querySelector<HTMLButtonElement>('.resolved-thread-toggle');
+  expect(toggle()?.getAttribute('aria-expanded')).toBe('false');
+  expect(toggle()?.textContent).toContain('Resolved conversation');
+  expect(toggle()?.textContent).toContain('2 comments');
+  expect(toggle()?.querySelectorAll('svg')).toHaveLength(1);
+  expect(view.container.textContent).not.toContain('Please keep this explicit.');
+
+  await act(async () => toggle()?.click());
+  expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
+  expect(view.container.textContent).toContain('Please keep this explicit.');
+
+  await view.rerender(
+    <ReviewCodeViewHarness
+      comments={comments}
+      files={[file]}
+      focusCommentId="gitlab:103"
+      focusCommentRequest={1}
+      onResolveThread={onResolveThread}
+      supportsReviewCommentActions
+    />,
+  );
+  expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
+
+  const reopen = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === 'Reopen',
+  );
+  await act(async () => reopen?.click());
+  expect(onResolveThread).toHaveBeenCalledWith('discussion-1', false);
+  expect(view.container.querySelector('.resolved-thread-toggle')).toBeNull();
+  expect(view.container.textContent).toContain('Please keep this explicit.');
+  expect(
+    [...view.container.querySelectorAll<HTMLButtonElement>('button')].some(
+      (button) => button.textContent === 'Reply',
+    ),
+  ).toBe(false);
+
+  await act(async () => finishResolve?.());
+  expect(
+    [...view.container.querySelectorAll<HTMLButtonElement>('button')].some(
+      (button) => button.textContent === 'Reply',
+    ),
+  ).toBe(true);
+});
+
+test('resolving an open review thread collapses it in place', async () => {
+  const file = createChangedFile('src/open-thread.ts');
+  const comment = {
+    author: { login: 'reviewer' },
+    body: 'Please keep this explicit.',
+    canResolveThread: true,
+    filePath: file.path,
+    id: 'gitlab:99',
+    isReadOnly: true,
+    lineNumber: 1,
+    sectionId: file.sections[0].id,
+    side: 'additions',
+    threadId: 'discussion-1',
+  } satisfies ReviewComment;
+  let finishResolve: (() => void) | null = null;
+  const onResolveThread = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishResolve = resolve;
+      }),
+  );
+  await using view = await renderReact(
+    <ReviewCodeViewHarness
+      comments={[comment]}
+      files={[file]}
+      onResolveThread={onResolveThread}
+      supportsReviewCommentActions
+    />,
+  );
+
+  const resolve = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === 'Resolve',
+  );
+  await act(async () => resolve?.click());
+
+  expect(onResolveThread).toHaveBeenCalledWith('discussion-1', true);
+  expect(
+    view.container
+      .querySelector<HTMLButtonElement>('.resolved-thread-toggle')
+      ?.getAttribute('aria-expanded'),
+  ).toBe('false');
+  expect(view.container.textContent).not.toContain('Please keep this explicit.');
+
+  await act(async () => finishResolve?.());
+});
+
+test('comment scroll targets navigate directly to their diff annotation', async () => {
+  const file = createChangedFile('src/deep-link.ts');
+  const comment = {
+    author: { login: 'reviewer' },
+    body: 'Linked review comment.',
+    filePath: file.path,
+    id: 'gitlab:99',
+    isReadOnly: true,
+    lineNumber: 1,
+    sectionId: file.sections[0].id,
+    side: 'additions',
+    threadId: 'discussion-1',
+  } satisfies ReviewComment;
+
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness
+      comments={[comment]}
+      files={[file]}
+      scrollTarget={{ commentId: comment.id, request: 1 }}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(codeViewMock.scrollTo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: `diff:${file.sections[0].id}`,
+        lineNumber: 1,
+        side: 'additions',
+        type: 'line',
+      }),
+    );
+  });
 });
 
 test('walkthrough hunk viewed state is keyed independently from file path', async () => {
@@ -1058,6 +1283,50 @@ test('hunk navigation skips pull request description source context', async () =
   );
 });
 
+test('markdown preview files survive layout updates in the real virtualized renderer', async () => {
+  await preloadHighlighter({ langs: ['text'], themes: ['github-dark'] });
+  const file = createLoadedMarkdownFile('# Readme\n', 'markdown-layout');
+  await using app = await renderReact(<ReviewCodeViewHarness files={[file]} />);
+  const root = document.createElement('div');
+  root.className = 'code-view';
+  document.body.append(root);
+  const viewer = new CodeView<unknown>({
+    disableErrorHandling: true,
+    theme: 'github-dark',
+    themeType: 'dark',
+  });
+  try {
+    viewer.setup(root);
+    viewer.setItems(codeViewMock.lastItems);
+    viewer.render(true);
+    expect(viewer.getRenderedItems()).toHaveLength(1);
+    await app.rerender(<ReviewCodeViewHarness collapsed={new Set([file.path])} files={[file]} />);
+    expect(codeViewMock.lastItems[0]?.collapsed).toBe(true);
+    viewer.setItems(codeViewMock.lastItems);
+    expect(() => viewer.render(true)).not.toThrow();
+    expect(viewer.getRenderedItems()).toHaveLength(1);
+    await app.rerender(<ReviewCodeViewHarness files={[file]} />);
+    viewer.setItems(codeViewMock.lastItems);
+    expect(() => viewer.render(true)).not.toThrow();
+
+    const updatedFile = createLoadedMarkdownFile('# Updated readme\n', 'markdown-updated');
+    await app.rerender(<ReviewCodeViewHarness files={[updatedFile]} />);
+    expect(codeViewMock.lastItems[0]?.annotations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ contents: '# Updated readme\n' }),
+        }),
+      ]),
+    );
+    viewer.setItems(codeViewMock.lastItems);
+    expect(() => viewer.render(true)).not.toThrow();
+    expect(viewer.getRenderedItems()).toHaveLength(1);
+  } finally {
+    viewer.cleanUp();
+    root.remove();
+  }
+});
+
 test('read-only markdown previews trigger CodeView layout remeasurement after height change', async () => {
   const markdownFile = createLoadedMarkdownFile(
     '![diagram](https://example.com/diagram.png)\n',
@@ -1102,6 +1371,109 @@ test('read-only markdown previews trigger CodeView layout remeasurement after he
   await waitFor(() => {
     expect(getCodeViewItemVersion(markdownItemId)).not.toBe(initialMarkdownVersion);
   });
+  const measuredVersion = getCodeViewItemVersion(markdownItemId);
+  await act(async () => {
+    markdownPreview?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  });
+  expect(getCodeViewItemVersion(markdownItemId)).toBe(measuredVersion);
+});
+
+test('recycled Markdown previews retain their measured height during layout-only updates', async () => {
+  await preloadHighlighter({ langs: ['text'], themes: ['github-dark'] });
+  const file = createLoadedMarkdownFile('# Long document\n', 'markdown-recycling');
+  const props = {
+    files: [file],
+    initialMarkdownPreviewSectionIds: new Set(['plan.md:unstaged']),
+    isReadOnly: true,
+  };
+  await using app = await renderReact(<ReviewCodeViewHarness {...props} />);
+
+  // jsdom has no layout. Supply the browser measurement of a tall annotation,
+  // but use Pierre's real renderer and height cache throughout this test.
+  const getRect = HTMLElement.prototype.getBoundingClientRect;
+  using _geometry = vi
+    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-line-annotation')
+        ? new DOMRect(0, 0, 900, 5000)
+        : getRect.call(this);
+    });
+  const container = document.createElement('div');
+  container.className = 'code-view';
+  document.body.append(container);
+  const viewer = new CodeView<unknown>({
+    disableErrorHandling: true,
+    renderAnnotation: () => document.createElement('div'),
+    theme: 'github-dark',
+    themeType: 'dark',
+  });
+  try {
+    viewer.setup(container);
+    viewer.setItems(codeViewMock.lastItems);
+    viewer.render(true);
+    const rendered = viewer.getRenderedItems()[0];
+    if (rendered?.type !== 'file') {
+      throw new Error('Expected a Markdown preview file.');
+    }
+    const height = rendered.instance.getVirtualizedHeight();
+    expect(height).toBeGreaterThan(5000);
+
+    // CodeView recycles the DOM when the document leaves its render window.
+    rendered.instance.cleanUp(true);
+    await act(async () => {
+      app.container
+        .querySelector('[aria-label="Preview plan.md"]')
+        ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    const next = codeViewMock.lastItems.find(({ id }) => id === rendered.id);
+    if (next?.type !== 'file') {
+      throw new Error('Expected the updated preview item.');
+    }
+    expect(next.version).not.toBe(rendered.version);
+    expect(rendered.instance.updateCodeViewLayout(next.file, 0, undefined, next.annotations)).toBe(
+      height,
+    );
+  } finally {
+    viewer.cleanUp();
+    container.remove();
+  }
+});
+
+test('Markdown previews reserve their last measured height while a recycled editor loads', async () => {
+  const file = createLoadedMarkdownFile('# Document\n', 'markdown-loading');
+  const itemId = 'diff:plan.md:unstaged';
+  markdownEditorMock.heightByAriaLabel.set('Edit plan.md', 5000);
+  await using app = await renderReact(<ReviewCodeViewHarness files={[file]} />);
+  const rerender = () => app.rerender(<ReviewCodeViewHarness files={[file]} />);
+  const remountLoadingEditor = async () => {
+    codeViewMock.hiddenAnnotationItemIds.add(itemId);
+    await rerender();
+    markdownEditorMock.loadingPaths.add('plan.md');
+    codeViewMock.hiddenAnnotationItemIds.delete(itemId);
+    await rerender();
+  };
+
+  await remountLoadingEditor();
+  expect(app.container.querySelector('.codiff-markdown-editor-message')?.textContent).toBe(
+    'Loading…',
+  );
+  expect(
+    app.container.querySelector('.codiff-markdown-preview')?.parentElement?.style.minHeight,
+  ).toBe('5000px');
+
+  // Once ready, a genuinely shorter document must be allowed to shrink.
+  markdownEditorMock.heightByAriaLabel.set('Edit plan.md', 2000);
+  markdownEditorMock.loadingPaths.clear();
+  await act(async () => {
+    window.dispatchEvent(new Event('markdown-loaded'));
+  });
+  expect(
+    app.container.querySelector('.codiff-markdown-preview')?.parentElement?.style.minHeight,
+  ).toBe('');
+  await remountLoadingEditor();
+  expect(
+    app.container.querySelector('.codiff-markdown-preview')?.parentElement?.style.minHeight,
+  ).toBe('2000px');
 });
 
 test('source description remains visible when a review has no diff items', async () => {
@@ -1253,12 +1625,14 @@ const renderLocalReviewComment = async ({
   body,
   onAskCodex,
   onCommentDraftChange,
+  onCreateComment,
   onDeleteComment,
   onUpdateComment,
 }: {
   body: string;
   onAskCodex: () => void;
   onCommentDraftChange?: () => void;
+  onCreateComment?: () => void;
   onDeleteComment?: () => void;
   onUpdateComment: () => void;
 }) => {
@@ -1277,6 +1651,7 @@ const renderLocalReviewComment = async ({
       files={[file]}
       onAskCodex={onAskCodex}
       onCommentDraftChange={onCommentDraftChange}
+      onCreateComment={onCreateComment}
       onDeleteComment={onDeleteComment}
       onUpdateComment={onUpdateComment}
     />,
@@ -1303,6 +1678,183 @@ const pressCommentShortcut = async (textarea: HTMLTextAreaElement, altKey: boole
     );
   });
 };
+
+const dispatchTestPointerEvent = (type: 'pointerdown' | 'pointerup') => {
+  const event = new Event(type);
+  Object.defineProperty(event, 'pointerId', { value: 1 });
+  window.dispatchEvent(event);
+};
+
+type StatefulReviewCommentState = ReturnType<typeof useReviewCommentDrafts> & {
+  comments: ReadonlyArray<ReviewComment>;
+};
+
+const ignoreCommentFileChange = () => {};
+
+function StatefulReviewCommentHarness({
+  file,
+  initialComment,
+  onState,
+  onUpdateComment,
+}: {
+  file: ChangedFile;
+  initialComment: ReviewComment;
+  onState: (state: StatefulReviewCommentState) => void;
+  onUpdateComment: (commentId: string, body: string) => void;
+}) {
+  const [comments, setComments] = useState<ReadonlyArray<ReviewComment>>([initialComment]);
+  const commentState = useReviewCommentDrafts({
+    comments,
+    onCommentFileChange: ignoreCommentFileChange,
+    setComments,
+  });
+  const updateCommentState = commentState.updateComment;
+  const updateComment = useCallback(
+    (commentId: string, body: string) => {
+      onUpdateComment(commentId, body);
+      updateCommentState(commentId, body);
+    },
+    [onUpdateComment, updateCommentState],
+  );
+  onState({ ...commentState, comments });
+
+  return (
+    <ReviewCodeViewHarness
+      comments={comments}
+      files={[file]}
+      focusCommentId={commentState.focusCommentId}
+      focusCommentRequest={commentState.focusCommentRequest}
+      onCommentDraftChange={commentState.updateActiveReviewCommentDraft}
+      onCreateComment={commentState.createComment}
+      onDeleteComment={commentState.deleteComment}
+      onUpdateComment={updateComment}
+    />
+  );
+}
+
+test('pointer-driven comment blurs preserve each newly focused editor across repeated moves', async () => {
+  vi.useFakeTimers();
+  using _timers = {
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
+  };
+  const randomUUID = vi
+    .spyOn(crypto, 'randomUUID')
+    .mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+    .mockReturnValueOnce('00000000-0000-4000-8000-000000000003')
+    .mockReturnValueOnce('00000000-0000-4000-8000-000000000004');
+  using _uuid = {
+    [Symbol.dispose]() {
+      randomUUID.mockRestore();
+    },
+  };
+  const onUpdateComment = vi.fn();
+  const file = createChangedFileWithPatch(
+    'src/comment.ts',
+    'diff --git a/src/comment.ts b/src/comment.ts\n@@ -1,4 +1,4 @@\n-old one\n-old two\n-old three\n-old four\n+new one\n+new two\n+new three\n+new four\n',
+  );
+  const initialComment = {
+    body: '',
+    filePath: file.path,
+    id: 'comment-1',
+    lineNumber: 1,
+    sectionId: file.sections[0].id,
+    side: 'additions',
+  } satisfies ReviewComment;
+  const stateRef: { current: StatefulReviewCommentState | null } = { current: null };
+  const getState = () => {
+    if (!stateRef.current) {
+      throw new Error('Expected review comment state.');
+    }
+    return stateRef.current;
+  };
+  const view = await renderReact(
+    <StatefulReviewCommentHarness
+      file={file}
+      initialComment={initialComment}
+      onState={(state) => (stateRef.current = state)}
+      onUpdateComment={onUpdateComment}
+    />,
+  );
+  await using _view = view;
+  const textarea = view.container.querySelector<HTMLTextAreaElement>('.review-comment-input');
+  if (!textarea) {
+    throw new Error('Expected review comment textarea.');
+  }
+  await act(async () => textarea.focus());
+  await setInputValue(textarea, 'Keep this draft.');
+  const lineElement = document.createElement('span');
+
+  const moveFocusedCommentToLine = async (lineNumber: number, expectedCommentId: string) => {
+    const focusedEditor = document.activeElement;
+    const activeDraftBeforeBlur = getState().activeReviewCommentDraftRef.current;
+    const updateCountBeforeBlur = onUpdateComment.mock.calls.length;
+    expect(focusedEditor).toBeInstanceOf(HTMLTextAreaElement);
+
+    await act(async () => {
+      dispatchTestPointerEvent('pointerdown');
+      (focusedEditor as HTMLTextAreaElement).blur();
+    });
+    expect(getState().activeReviewCommentDraftRef.current).toEqual(activeDraftBeforeBlur);
+    expect(onUpdateComment).toHaveBeenCalledTimes(updateCountBeforeBlur);
+
+    const { item, onLineClick } = getReviewCodeViewHandlers();
+    await act(async () => {
+      dispatchTestPointerEvent('pointerup');
+      onLineClick(
+        {
+          annotationSide: 'additions',
+          event: nonInteractivePointerEvent,
+          lineElement,
+          lineNumber,
+        },
+        { item },
+      );
+    });
+    expect(onUpdateComment).toHaveBeenCalledTimes(updateCountBeforeBlur);
+
+    const destinationEditor = view.container.querySelector<HTMLTextAreaElement>(
+      `[aria-label="Comment on src/comment.ts New line ${lineNumber}"]`,
+    );
+    expect(document.activeElement).toBe(destinationEditor);
+    expect(getState().focusCommentId).toBe(expectedCommentId);
+    expect(getState().activeReviewCommentDraftRef.current).toEqual({
+      body: '',
+      id: expectedCommentId,
+    });
+
+    await act(async () => vi.advanceTimersByTime(0));
+
+    // The deferred blur belongs to the previous editor. It must not clear the
+    // destination editor's active draft after that editor has received focus.
+    expect(getState().activeReviewCommentDraftRef.current).toEqual({
+      body: '',
+      id: expectedCommentId,
+    });
+  };
+
+  await moveFocusedCommentToLine(2, '00000000-0000-4000-8000-000000000002');
+  expect(onUpdateComment).toHaveBeenCalledOnce();
+  expect(onUpdateComment).toHaveBeenCalledWith('comment-1', 'Keep this draft.');
+  expect(getState().comments.map(({ body, lineNumber }) => ({ body, lineNumber }))).toEqual([
+    { body: 'Keep this draft.', lineNumber: 1 },
+    { body: '', lineNumber: 2 },
+  ]);
+
+  await moveFocusedCommentToLine(3, '00000000-0000-4000-8000-000000000003');
+  expect(getState().comments.map(({ body, lineNumber }) => ({ body, lineNumber }))).toEqual([
+    { body: 'Keep this draft.', lineNumber: 1 },
+    { body: '', lineNumber: 3 },
+  ]);
+
+  await moveFocusedCommentToLine(4, '00000000-0000-4000-8000-000000000004');
+  expect(getState().comments.map(({ body, lineNumber }) => ({ body, lineNumber }))).toEqual([
+    { body: 'Keep this draft.', lineNumber: 1 },
+    { body: '', lineNumber: 4 },
+  ]);
+  expect(onUpdateComment).toHaveBeenCalledOnce();
+});
 
 test('local review comments are added with Mod+Enter instead of asking the agent', async () => {
   const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
@@ -1709,6 +2261,7 @@ type ReviewLineClickHandler = (
   line: {
     annotationSide: 'additions' | 'deletions';
     event: unknown;
+    lineElement?: HTMLElement;
     lineNumber: number;
   },
   context: { item: unknown },
@@ -1736,17 +2289,624 @@ const getReviewCodeViewHandlers = () => {
 
 const nonInteractivePointerEvent = { composedPath: () => [] };
 
-test('line content clicks create review comments unless text is selected', async () => {
+test('modifier-clicking an identifier finds and opens its definition without commenting', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('Win32');
+  const onCreateComment = vi.fn();
+  const onFindDefinitions = vi.fn(async () => ({
+    candidates: [
+      {
+        canOpenInEditor: true,
+        kind: 'function',
+        line: 'export function formatGreeting() {}',
+        lineNumber: 1,
+        path: 'src/greeting.ts',
+        side: 'additions' as const,
+      },
+    ],
+    identifier: 'formatGreeting',
+    status: 'ready' as const,
+  }));
+  const onOpenDefinition = vi.fn();
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      onCreateComment={onCreateComment}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={onOpenDefinition}
+    />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: true,
+          metaKey: false,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+
+  await waitFor(() => {
+    expect(document.querySelector('.definition-popover-result')).not.toBeNull();
+  });
+  expect(onFindDefinitions).toHaveBeenCalledWith({
+    identifier: 'formatGreeting',
+    kind: 'unstaged',
+    lineNumber: 1,
+    path: 'src/main.ts',
+    side: 'additions',
+    source: { type: 'working-tree' },
+  });
+  expect(onCreateComment).not.toHaveBeenCalled();
+
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('.definition-popover-result')?.click();
+  });
+  expect(onOpenDefinition).toHaveBeenCalledWith(
+    expect.objectContaining({ lineNumber: 1, path: 'src/greeting.ts' }),
+  );
+});
+
+test('macOS Control-click keeps the context-menu gesture instead of finding a definition', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  const onFindDefinitions = vi.fn();
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness files={[file]} onFindDefinitions={onFindDefinitions} />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+  const preventDefault = vi.fn();
+  const stopPropagation = vi.fn();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: true,
+          metaKey: false,
+          preventDefault,
+          stopPropagation,
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+
+  expect(onFindDefinitions).not.toHaveBeenCalled();
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(stopPropagation).not.toHaveBeenCalled();
+});
+
+test('definition results inside the rendered diff jump in Codiff instead of opening an editor', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  const onFindDefinitions = vi.fn(async () => ({
+    candidates: [
+      {
+        canOpenInEditor: false,
+        kind: 'function',
+        line: 'function formatGreeting() {}',
+        lineNumber: 1,
+        path: 'src/main.ts',
+        side: 'additions' as const,
+      },
+    ],
+    identifier: 'formatGreeting',
+    status: 'ready' as const,
+  }));
+  const onOpenDefinition = vi.fn();
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={onOpenDefinition}
+    />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: false,
+          metaKey: true,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+
+  await waitFor(() => {
+    expect(document.querySelector('.definition-popover-result')).not.toBeNull();
+  });
+  expect(document.querySelector('[aria-label="Jump within diff"]')).not.toBeNull();
+
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('.definition-popover-result')?.click();
+  });
+  expect(codeViewMock.scrollTo).toHaveBeenCalledWith({
+    align: 'center',
+    behavior: 'smooth-auto',
+    id: item.id,
+    lineNumber: 1,
+    offset: 11,
+    side: 'additions',
+    type: 'line',
+  });
+  expect(onOpenDefinition).not.toHaveBeenCalled();
+});
+
+test('historical definitions outside the diff do not open the current checkout', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  const onFindDefinitions = vi.fn(async () => ({
+    candidates: [
+      {
+        canOpenInEditor: false,
+        kind: 'function',
+        line: 'function formatGreeting() {}',
+        lineNumber: 20,
+        path: 'src/greeting.ts',
+        side: 'additions' as const,
+      },
+    ],
+    identifier: 'formatGreeting',
+    status: 'ready' as const,
+  }));
+  const onOpenDefinition = vi.fn();
+  const file = createChangedFile('src/main.ts', {
+    kind: 'commit',
+    patch: 'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  });
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={onOpenDefinition}
+      source={{ ref: 'abcdef0', type: 'commit' }}
+    />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: false,
+          metaKey: true,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+
+  await waitFor(() => {
+    expect(document.querySelector('.definition-popover-result')).not.toBeNull();
+  });
+  const result = document.querySelector<HTMLButtonElement>('.definition-popover-result');
+  expect(result?.disabled).toBe(true);
+  expect(
+    document.querySelector('[aria-label="Unavailable outside this historical diff"]'),
+  ).not.toBeNull();
+  await act(async () => result?.click());
+  expect(onOpenDefinition).not.toHaveBeenCalled();
+});
+
+test('definition search rejection becomes an unavailable result', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('Win32');
+  const onFindDefinitions = vi.fn(async () => {
+    throw new Error('IPC unavailable');
+  });
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={() => {}}
+    />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: true,
+          metaKey: false,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+
+  await waitFor(() => {
+    expect(document.querySelector('.definition-popover-message')?.textContent).toBe(
+      'Definition search is unavailable for this repository.',
+    );
+  });
+});
+
+test('definition result is invalidated when the review source changes', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('Win32');
+  let resolveSearch: ((result: DefinitionSearchResult) => void) | undefined;
+  const onFindDefinitions = vi.fn(
+    () =>
+      new Promise<DefinitionSearchResult>((resolve) => {
+        resolveSearch = resolve;
+      }),
+  );
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  const lineElement = document.createElement('div');
+  const token = document.createElement('span');
+  token.textContent = 'formatGreeting';
+  lineElement.append(token, '()');
+  await using view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={() => {}}
+    />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item, onLineClick } = getReviewCodeViewHandlers();
+
+  await act(async () => {
+    onLineClick(
+      {
+        annotationSide: 'additions',
+        event: {
+          clientX: 120,
+          clientY: 80,
+          composedPath: () => [],
+          ctrlKey: true,
+          metaKey: false,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          target: token,
+        },
+        lineElement,
+        lineNumber: 1,
+      },
+      { item },
+    );
+  });
+  expect(document.querySelector('.definition-popover')).not.toBeNull();
+
+  await view.rerender(
+    <ReviewCodeViewHarness
+      files={[createChangedFile('src/next.ts', { kind: 'commit' })]}
+      onFindDefinitions={onFindDefinitions}
+      onOpenDefinition={() => {}}
+      source={{ ref: 'abcdef0', type: 'commit' }}
+    />,
+  );
+  await act(async () => {
+    resolveSearch?.({ candidates: [], identifier: 'formatGreeting', status: 'ready' });
+  });
+  expect(document.querySelector('.definition-popover')).toBeNull();
+});
+
+test('modifier navigation follows file hosts reused by CodeView virtualization', async () => {
+  const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  const onFindDefinitions = vi.fn(async () => ({
+    candidates: [],
+    identifier: 'formatGreeting',
+    status: 'ready' as const,
+  }));
+  const file = createChangedFileWithPatch(
+    'src/main.ts',
+    'diff --git a/src/main.ts b/src/main.ts\n@@ -1 +1 @@\n-old()\n+formatGreeting()\n',
+  );
+  await using _view = await renderReact(
+    <ReviewCodeViewHarness files={[file]} onFindDefinitions={onFindDefinitions} />,
+  );
+  await using _platform = {
+    [Symbol.dispose]() {
+      platform.mockRestore();
+    },
+  };
+  const { item } = getReviewCodeViewHandlers();
+  const onPostRender = codeViewMock.lastOptions?.onPostRender as
+    | ((
+        node: HTMLElement,
+        instance: unknown,
+        phase: 'update',
+        context: { item: typeof item },
+      ) => void)
+    | undefined;
+  const host = document.createElement('diffs-container');
+  const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
+  document.body.append(host);
+
+  await using _host = {
+    [Symbol.dispose]() {
+      host.remove();
+    },
+  };
+  const renderLine = (identifier: string) => {
+    const line = document.createElement('div');
+    line.dataset.line = '1';
+    line.textContent = `${identifier}();`;
+    root.replaceChildren(line);
+    onPostRender?.(host, {}, 'update', { item });
+  };
+
+  await act(async () => {
+    window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, metaKey: true }));
+    renderLine('firstFileSymbol');
+  });
+  await waitFor(() => {
+    expect(root.querySelector('[data-codiff-identifier]')?.textContent).toBe('firstFileSymbol');
+  });
+
+  await act(async () => renderLine('newlyVirtualizedFileSymbol'));
+  await waitFor(() => {
+    expect(root.querySelector('[data-codiff-identifier]')?.textContent).toBe(
+      'newlyVirtualizedFileSymbol',
+    );
+  });
+});
+
+const renderIdentifierNavigationView = async () => {
+  const view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[createChangedFile('src/main.ts')]}
+      onFindDefinitions={async ({ identifier }) => ({
+        candidates: [],
+        identifier,
+        status: 'ready',
+      })}
+    />,
+  );
+  const { item } = getReviewCodeViewHandlers();
+  const host = document.createElement('div');
+  const root = host.attachShadow({ mode: 'open' });
+  const line = document.createElement('div');
+  line.dataset.line = '1';
+  line.textContent = 'formatGreeting(name);';
+  root.append(line);
+  view.container.append(host);
+  codeViewMock.renderedElements.set(item.id, host);
+  const onPostRender = codeViewMock.lastOptions?.onPostRender as (
+    node: HTMLElement,
+    instance: unknown,
+    phase: 'update',
+    context: { item: typeof item },
+  ) => void;
+
+  return {
+    ...view,
+    flushHighlights: async () => {
+      await act(async () => {
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      });
+    },
+    host,
+    line,
+    postRender: () => onPostRender(host, {}, 'update', { item }),
+    root,
+  };
+};
+
+test.each(['MacIntel', 'Win32'])(
+  'modifier highlights preserve text selected before deferred updates and during copy on %s',
+  async (platform) => {
+    using _platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform);
+    await using view = await renderIdentifierNavigationView();
+    const isMac = platform === 'MacIntel';
+    const modifier = { ctrlKey: !isMac, metaKey: isMac };
+    const modifierKey = isMac ? 'Meta' : 'Control';
+    const text = view.line.firstChild!;
+    const range = document.createRange();
+    const collapsedRange = document.createRange();
+    using _selection = vi.spyOn(window, 'getSelection').mockReturnValue({
+      getComposedRanges: () => [range],
+      getRangeAt: () => collapsedRange,
+      isCollapsed: true,
+      rangeCount: 1,
+      toString: () => '',
+    } as unknown as Selection);
+
+    // Selection starts after keydown but before either scheduled highlight path.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: modifierKey, ...modifier }));
+    view.postRender();
+    range.setStart(text, 0);
+    range.setEnd(text, 14);
+    await view.flushHighlights();
+    expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(false);
+    expect(view.root.querySelector('[data-codiff-identifier]')).toBeNull();
+    expect(range.toString()).toBe('formatGreeting');
+    expect(text.isConnected).toBe(true);
+
+    for (const type of ['keydown', 'keyup']) {
+      const event = new KeyboardEvent(type, { cancelable: true, key: 'c', ...modifier });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: modifierKey }));
+    expect(range.toString()).toBe('formatGreeting');
+
+    // Pressing the modifier with an existing selection is also harmless.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: modifierKey, ...modifier }));
+    await view.flushHighlights();
+    expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(false);
+    expect(range.toString()).toBe('formatGreeting');
+
+    // Clearing selection restores highlights without requiring another keypress.
+    range.collapse();
+    document.dispatchEvent(new Event('selectionchange'));
+    await view.flushHighlights();
+    expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(true);
+    const identifierText = view.root.querySelector('[data-codiff-identifier]')!.firstChild!;
+    range.selectNodeContents(identifierText);
+    document.dispatchEvent(new Event('selectionchange'));
+    await view.flushHighlights();
+    expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(false);
+    expect(range.toString()).toBe('formatGreeting');
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: modifierKey }));
+    expect(range.toString()).toBe('formatGreeting');
+    expect(range.startContainer).toBe(identifierText);
+    expect(identifierText.isConnected).toBe(true);
+  },
+);
+
+test('pointer selection cancels pending modifier highlights and resumes after release', async () => {
+  using _platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  await using view = await renderIdentifierNavigationView();
+  const text = view.line.firstChild;
+
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }));
+  view.postRender();
+  window.dispatchEvent(new MouseEvent('pointerdown', { buttons: 1, metaKey: true }));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }));
+  window.dispatchEvent(new MouseEvent('pointermove', { buttons: 1, metaKey: true }));
+  view.postRender();
+  await view.flushHighlights();
+  expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(false);
+  expect(view.root.querySelector('[data-codiff-identifier]')).toBeNull();
+  expect(view.line.firstChild).toBe(text);
+
+  window.dispatchEvent(new MouseEvent('pointerup', { buttons: 0, metaKey: true }));
+  await view.flushHighlights();
+  expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(true);
+  expect(view.root.querySelector('[data-codiff-identifier]')?.textContent).toBe('formatGreeting');
+
+  // Losing pointer capture or window focus must not leave dragging latched.
+  for (const resetEvent of ['pointercancel', 'blur']) {
+    window.dispatchEvent(new MouseEvent('pointerdown', { buttons: 1, metaKey: true }));
+    window.dispatchEvent(new Event(resetEvent));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }));
+    await view.flushHighlights();
+    expect(view.host.hasAttribute('data-codiff-definition-mode')).toBe(true);
+  }
+});
+
+test('line content clicks only ignore text selected on the clicked line', async () => {
   const onCreateComment = vi.fn();
   const file = createChangedFileWithPatch(
     'src/click.ts',
-    'diff --git a/src/click.ts b/src/click.ts\n@@ -1 +1 @@\n-old\n+new\n',
+    'diff --git a/src/click.ts b/src/click.ts\n@@ -1,2 +1,2 @@\n-old one\n-old two\n+new one\n+new two\n',
   );
   const container = document.createElement('div');
-  const selectionHost = document.createElement('span');
-  selectionHost.textContent = 'selected code';
-  document.body.append(container);
-  document.body.append(selectionHost);
+  const shadowHost = document.createElement('div');
+  const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+  const lineElement = document.createElement('span');
+  const lineText = document.createTextNode('selected code');
+  lineElement.append(lineText);
+  const otherLineElement = document.createElement('span');
+  otherLineElement.textContent = 'other code';
+  shadowRoot.append(lineElement, otherLineElement);
+  document.body.append(container, shadowHost);
   let root: Root | null = null;
 
   await using _resource = {
@@ -1756,7 +2916,7 @@ test('line content clicks create review comments unless text is selected', async
         await act(async () => root?.unmount());
       }
       container.remove();
-      selectionHost.remove();
+      shadowHost.remove();
     },
   };
   await act(async () => {
@@ -1771,6 +2931,7 @@ test('line content clicks create review comments unless text is selected', async
       {
         annotationSide: 'additions',
         event: nonInteractivePointerEvent,
+        lineElement,
         lineNumber: 1,
       },
       { item },
@@ -1783,28 +2944,66 @@ test('line content clicks create review comments unless text is selected', async
     sectionId: 'src/click.ts:unstaged',
     side: 'additions',
   });
-  const selection = window.getSelection();
-  const textSelection = document.createRange();
-  textSelection.selectNodeContents(selectionHost);
-  selection?.removeAllRanges();
-  selection?.addRange(textSelection);
-  await act(async () => {
-    onLineClick(
-      {
-        annotationSide: 'additions',
-        event: nonInteractivePointerEvent,
-        lineNumber: 1,
-      },
-      { item },
-    );
-  });
-  expect(onCreateComment).toHaveBeenCalledTimes(1);
-  selection?.removeAllRanges();
+
+  const getComposedRanges = vi.fn(() => [
+    {
+      collapsed: false,
+      endContainer: lineText,
+      endOffset: lineText.length,
+      startContainer: lineText,
+      startOffset: 0,
+    } as StaticRange,
+  ]);
+  const selectedRange = document.createRange();
+  selectedRange.selectNodeContents(lineElement);
+  {
+    using _selectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue({
+      getComposedRanges,
+      getRangeAt: () => selectedRange,
+      isCollapsed: true,
+      rangeCount: 1,
+      toString: () => '',
+    } as unknown as Selection);
+
+    await act(async () => {
+      onLineClick(
+        {
+          annotationSide: 'additions',
+          event: nonInteractivePointerEvent,
+          lineElement,
+          lineNumber: 1,
+        },
+        { item },
+      );
+    });
+    expect(getComposedRanges).toHaveBeenCalledWith({ shadowRoots: [shadowRoot] });
+    expect(onCreateComment).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      onLineClick(
+        {
+          annotationSide: 'additions',
+          event: nonInteractivePointerEvent,
+          lineElement: otherLineElement,
+          lineNumber: 2,
+        },
+        { item },
+      );
+    });
+    expect(onCreateComment).toHaveBeenCalledTimes(2);
+    expect(onCreateComment).toHaveBeenLastCalledWith({
+      filePath: 'src/click.ts',
+      lineNumber: 2,
+      sectionId: 'src/click.ts:unstaged',
+      side: 'additions',
+    });
+  }
+
   await act(async () => {
     onLineSelectionEnd(range, { item });
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(onCreateComment).toHaveBeenCalledTimes(2);
+  expect(onCreateComment).toHaveBeenCalledTimes(3);
   expect(onCreateComment).toHaveBeenLastCalledWith({
     filePath: 'src/click.ts',
     lineNumber: 1,
@@ -1818,5 +3017,70 @@ test('line content clicks create review comments unless text is selected', async
     onLineSelectionEnd(range, { item });
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(onCreateComment).toHaveBeenCalledTimes(3);
+  expect(onCreateComment).toHaveBeenCalledTimes(4);
+});
+
+test('viewed state and collapse synchronize when switching between tree and walkthrough', async () => {
+  const file = createChangedFile('src/shared.ts', {
+    patch: '@@ -1 +1 @@\n-old\n+new\n@@ -10 +10 @@\n-before\n+after\n',
+  });
+  const blocks = [1, 2].map((ordinal) => ({
+    file,
+    id: `block-${ordinal}`,
+    itemIdPrefix: `block-${ordinal}`,
+    reviewIdentity: getWalkthroughReviewIdentity(file, [`${file.sections[0].id}:h${ordinal}`]),
+  }));
+  function Harness({ walkthrough = false }: { walkthrough?: boolean }) {
+    const {
+      collapsed,
+      expandedReviewKeys,
+      itemVersionByKey,
+      toggleCollapsed,
+      toggleViewed,
+      viewed,
+    } = useReviewFileState();
+    return (
+      <ReviewCodeViewHarness
+        blocks={walkthrough ? blocks : undefined}
+        collapsed={collapsed}
+        expandedReviewKeys={expandedReviewKeys}
+        files={walkthrough ? [] : [file]}
+        itemVersionByKey={itemVersionByKey}
+        onToggleCollapsed={toggleCollapsed}
+        onToggleViewed={toggleViewed}
+        viewed={viewed}
+      />
+    );
+  }
+  await using view = await renderReact(<Harness />);
+  const buttons = () => [
+    ...view.container.querySelectorAll<HTMLButtonElement>('.codiff-viewed-button'),
+  ];
+  const collapsedCount = () => view.container.querySelectorAll('[aria-label="Expand file"]').length;
+  await act(async () => buttons()[0].click());
+  await view.rerender(<Harness walkthrough />);
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+  expect(collapsedCount()).toBe(2);
+  // A viewed block can still be opened explicitly.
+  await act(async () =>
+    view.container.querySelector<HTMLButtonElement>('[aria-label="Expand file"]')!.click(),
+  );
+  expect(collapsedCount()).toBe(1);
+  await act(async () => buttons()[0].click());
+  await view.rerender(<Harness />);
+  expect(buttons()[0].getAttribute('aria-pressed')).toBe('false');
+  expect(collapsedCount()).toBe(0);
+  await view.rerender(<Harness walkthrough />);
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+  await act(async () => buttons()[0].click());
+  await view.rerender(<Harness />);
+  expect(buttons()[0].getAttribute('aria-pressed')).toBe('true');
+  expect(collapsedCount()).toBe(1);
+  await act(async () => buttons()[0].click());
+  await view.rerender(<Harness walkthrough />);
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual([
+    'false',
+    'false',
+  ]);
+  expect(collapsedCount()).toBe(0);
 });

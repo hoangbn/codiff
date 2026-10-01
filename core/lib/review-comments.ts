@@ -17,9 +17,58 @@ export const isInteractiveReviewEvent = (event: PointerEvent) =>
         target.closest('.review-comment-thread')),
   );
 
-export const hasActiveTextSelection = () => {
+const rangeIntersectsTarget = (range: AbstractRange, target: Node) => {
+  const targetRoot = target.getRootNode();
+  if (
+    range.startContainer.getRootNode() !== targetRoot ||
+    range.endContainer.getRootNode() !== targetRoot
+  ) {
+    return false;
+  }
+
+  const selectionRange = (target.ownerDocument ?? document).createRange();
+  selectionRange.setStart(range.startContainer, range.startOffset);
+  selectionRange.setEnd(range.endContainer, range.endOffset);
+  return selectionRange.intersectsNode(target);
+};
+
+const isExpandedSelection = (selection: Selection | null | undefined, target?: Node | null) => {
+  if (selection == null || selection.rangeCount === 0) {
+    return false;
+  }
+
+  const range = selection.getRangeAt(0);
+  return (
+    (!selection.isCollapsed || selection.toString().length > 0 || !range.collapsed) &&
+    (!target || rangeIntersectsTarget(range, target))
+  );
+};
+
+const isExpandedRange = (range: AbstractRange | null | undefined, target?: Node | null) =>
+  range != null && !range.collapsed && (!target || rangeIntersectsTarget(range, target));
+
+export const hasActiveTextSelection = (target?: Node | null) => {
   const selection = window.getSelection();
-  return selection != null && selection.rangeCount > 0 && !selection.isCollapsed;
+  const root = target?.getRootNode();
+  const shadowRoot = root && 'host' in root ? (root as ShadowRoot) : null;
+
+  // Pierre renders code inside a shadow root. The document selection can look
+  // collapsed at that boundary even though its composed range contains text.
+  if (shadowRoot) {
+    const composedRange = selection?.getComposedRanges?.({ shadowRoots: [shadowRoot] })[0];
+    if (isExpandedRange(composedRange, target)) {
+      return true;
+    }
+
+    const shadowSelection = (
+      shadowRoot as ShadowRoot & { getSelection?: () => Selection | null }
+    ).getSelection?.();
+    if (isExpandedSelection(shadowSelection, target)) {
+      return true;
+    }
+  }
+
+  return isExpandedSelection(selection, target);
 };
 
 export const isFileReviewComment = (
@@ -384,7 +433,9 @@ export const getReviewCommentsFromState = (state: RepositoryState): ReadonlyArra
   (state.reviewComments ?? []).flatMap((comment) => {
     const file = state.files.find((candidate) => candidate.path === comment.filePath);
     const section =
-      file?.sections.find((candidate) => candidate.id === comment.sectionId) ?? file?.sections[0];
+      comment.sectionId == null
+        ? file?.sections[0]
+        : file?.sections.find((candidate) => candidate.id === comment.sectionId);
     return section
       ? [
           {
@@ -411,6 +462,18 @@ export const getReviewCommentsFromState = (state: RepositoryState): ReadonlyArra
         ]
       : [];
   });
+
+// Refreshing the repository state to pick up Markdown edits must not discard
+// locally created review comments, which only live in React state. Comments
+// from the refreshed state win over local ones that share an id.
+export const getRefreshedReviewComments = (
+  state: RepositoryState,
+  currentComments: ReadonlyArray<ReviewComment>,
+): ReadonlyArray<ReviewComment> =>
+  mergeReviewComments(
+    getReviewCommentsFromState(state),
+    currentComments.filter((comment) => !comment.isReadOnly),
+  );
 
 export const getVisibleReviewComments = (
   comments: ReadonlyArray<ReviewComment>,

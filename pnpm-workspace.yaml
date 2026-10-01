@@ -1,6 +1,7 @@
 packages:
   - core
   - service
+  - test
   - web
 
 allowBuilds:
@@ -19,10 +20,14 @@ allowBuilds:
 blockExoticSubdeps: false
 minimumReleaseAgeExclude:
   - '@nkzw/*'
+  - void-fate
+  - '@void/*'
+  - react-fate
+  - void
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@^0.2.6
-  vite-plus: ^0.2.6
-  vitest: 4.1.10
+  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
+  vite-plus: 1.0.0
+  vitest: 5.0.2
 nodeLinker: hoisted
 onlyBuiltDependencies:
   - '@nkzw/mdx-editor'
@@ -32,8 +37,7 @@ onlyBuiltDependencies:
   - unrs-resolver
 overrides:
   extract-zip>yauzl: ^3.4.0
-  vite: 'catalog:'
-  vitest: 'catalog:'
+  vite@*: 'catalog:'
 patchedDependencies:
   native-keymap@3.3.9: patches/native-keymap@3.3.9.patch
 peerDependencyRules:

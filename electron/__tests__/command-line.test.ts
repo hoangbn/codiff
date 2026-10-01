@@ -96,7 +96,7 @@ test('parses the OpenCode agent override', () => {
   });
 });
 
-test.sequential('plan command lines do not inspect Git refs', async () => {
+test('plan command lines do not inspect Git refs', { concurrent: false }, async () => {
   await using directory = await createTemporaryDirectory('codiff-plan-command-line-');
   const fakeBin = join(directory.path, 'bin');
   const gitMarker = join(directory.path, 'git-invoked');
@@ -538,8 +538,10 @@ test('reads base...head and base..head positionals as a range source', async () 
     type: 'range',
   });
 
-  // A range whose ends don't resolve is not treated as a source.
-  expect(
-    readCommandLine(['codiff', 'nope...nada', directory.path]).launchOptions.source,
-  ).toBeUndefined();
+  expect(readCommandLine(['codiff', 'nope...nada', directory.path]).launchOptions.source).toEqual({
+    base: 'nope',
+    head: 'nada',
+    symmetric: true,
+    type: 'range',
+  });
 });

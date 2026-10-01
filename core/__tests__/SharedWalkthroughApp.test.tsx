@@ -6,10 +6,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
 import { ReviewTopBar } from '../app/components/ReviewTopBar.tsx';
-import { ReviewSurface, type ReviewCommenting } from '../SharedWalkthroughApp.tsx';
+import { ReviewSurface, type ReviewCommenting } from '../react.ts';
 import type { NarrativeWalkthrough, SharedWalkthroughSnapshot } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
-import { waitFor } from './helpers/react.tsx';
+import { renderReact, waitFor } from './helpers/react.tsx';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   ResizeObserver?: typeof ResizeObserver;
@@ -65,70 +65,271 @@ const commenting = {
   onUpdateGeneralComment: async () => {},
 } satisfies ReviewCommenting;
 
-test('review top bar renders its leading control at the far left', async () => {
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
+const sharedWalkthroughSource = { type: 'working-tree' } as const;
+const sharedWalkthroughSnapshot = {
+  branch: 'main',
+  codiffVersion: '1.4.1',
+  exportedAt: '2026-06-19T00:00:00.000Z',
+  files: [createChangedFile('src/app.ts')],
+  kind: 'codiff-walkthrough-share',
+  preferences: {
+    codeFontFamily: 'Fira Code',
+    codeFontSize: 13,
+    diffStyle: 'split',
+    showWhitespace: false,
+    theme: 'system',
+    wordWrap: false,
+  },
+  repository: { root: '/Users/ada/dev/codiff-web', source: sharedWalkthroughSource },
+  version: 1,
+  walkthrough: {
+    agent: 'codex',
+    chapters: [],
+    focus: 'Focus on the implementation.',
+    generatedAt: '2026-06-19T00:00:00.000Z',
+    kind: 'narrative',
+    repo: { branch: 'main', root: '/Users/ada/dev/codiff-web' },
+    source: sharedWalkthroughSource,
+    support: [],
+    title: 'Shared walkthrough',
+    version: 4,
+  },
+} satisfies SharedWalkthroughSnapshot;
 
-  await act(async () => {
-    root.render(
-      <ReviewTopBar
-        leading={<button className="codiff-logo">Codiff</button>}
-        mode="tree"
-        modes={[{ icon: null, label: 'Tree', value: 'tree' }]}
-        onModeChange={() => {}}
-        onToggleSidebar={() => {}}
-        repository="cloudflare/voidzero/codiff-web"
-        sidebarCollapsed={false}
-        toggleTitle="Collapse sidebar"
-      />,
-    );
-  });
+test.each([
+  { iconTransform: null, position: 'left' },
+  { iconTransform: 'scale(-1, 1)', position: 'right' },
+] as const)('review top bar places its sidebar control on the $position', async (testCase) => {
+  await using view = await renderReact(
+    <ReviewTopBar
+      leading={
+        <button className="codiff-logo" type="button">
+          Codiff
+        </button>
+      }
+      mode="tree"
+      modes={[{ icon: null, label: 'Tree', value: 'tree' }]}
+      onModeChange={() => {}}
+      onToggleSidebar={() => {}}
+      repository="cloudflare/voidzero/codiff-web"
+      sidebarCollapsed={false}
+      sidebarPosition={testCase.position}
+      toggleTitle="Collapse sidebar"
+    />,
+  );
 
-  const leftRegion = container.querySelector('.review-top-bar-left');
+  const leftRegion = view.container.querySelector('.review-top-bar-left');
   expect(leftRegion?.firstElementChild?.className).toBe('codiff-logo');
   expect(leftRegion?.nextElementSibling?.classList.contains('review-mode-control')).toBe(true);
   expect(leftRegion?.nextElementSibling?.nextElementSibling?.className).toBe(
     'review-top-bar-right',
   );
-
-  await act(async () => root.unmount());
-  container.remove();
+  const toggle = view.container.querySelector(
+    `.review-top-bar-${testCase.position} > .sidebar-toggle-button`,
+  );
+  expect(toggle).not.toBeNull();
+  expect(toggle?.querySelector('svg')?.getAttribute('transform')).toBe(testCase.iconTransform);
 });
 
-test('share viewer shows the complete repository path when there is no repository link', async () => {
-  const file = createChangedFile('src/app.ts');
-  const source = { type: 'working-tree' } as const;
+test.each([
+  { columns: '292px 0 minmax(0, 1fr)', position: 'left' },
+  { columns: 'minmax(0, 1fr) 0 292px', position: 'right' },
+] as const)('$position review surface layout', async (testCase) => {
+  window.localStorage.clear();
+  await using view = await renderReact(
+    <ReviewSurface sidebarPosition={testCase.position} snapshot={sharedWalkthroughSnapshot} />,
+  );
+
+  const shell = view.container.querySelector<HTMLElement>('.app-shell');
+  expect(shell?.dataset.sidebarPosition).toBe(testCase.position);
+  await waitFor(() => {
+    expect(shell?.style.gridTemplateColumns).toBe(testCase.columns);
+  });
+});
+
+test('tree review keeps the snapshot focus file ahead of alphabetical siblings', async () => {
   const snapshot = {
-    branch: 'main',
-    codiffVersion: '1.4.1',
-    exportedAt: '2026-06-19T00:00:00.000Z',
-    files: [file],
-    kind: 'codiff-walkthrough-share',
-    preferences: {
-      codeFontFamily: 'Fira Code',
-      codeFontSize: 13,
-      diffStyle: 'split',
-      showWhitespace: false,
-      theme: 'system',
-      wordWrap: false,
-    },
-    repository: { root: '/Users/ada/dev/codiff-web', source },
-    version: 1,
-    walkthrough: {
-      agent: 'codex',
-      chapters: [],
-      focus: 'Focus on the implementation.',
-      generatedAt: '2026-06-19T00:00:00.000Z',
-      kind: 'narrative',
-      repo: { branch: 'main', root: '/Users/ada/dev/codiff-web' },
-      source,
-      support: [],
-      title: 'Shared walkthrough',
-      version: 4,
+    ...sharedWalkthroughSnapshot,
+    files: [createChangedFile('current.md'), createChangedFile('changed.png')],
+  } satisfies SharedWalkthroughSnapshot;
+  await using view = await renderReact(<ReviewSurface initialMode="tree" snapshot={snapshot} />);
+
+  await waitFor(() => {
+    expect(view.container.querySelectorAll('.codiff-file-header')).toHaveLength(2);
+  });
+  expect(view.container.querySelector('.codiff-file-header')?.textContent).toContain('current.md');
+});
+
+test('review surface starts with the sidebar collapsed on mobile viewports', async () => {
+  window.localStorage.clear();
+  const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query) =>
+      ({
+        addEventListener() {},
+        addListener() {},
+        dispatchEvent: () => false,
+        matches: query === '(max-width: 720px)',
+        media: query,
+        onchange: null,
+        removeEventListener() {},
+        removeListener() {},
+      }) as MediaQueryList,
+  );
+
+  try {
+    await using view = await renderReact(<ReviewSurface snapshot={sharedWalkthroughSnapshot} />);
+
+    await waitFor(() => {
+      expect(
+        view.container.querySelector('.app-shell')?.classList.contains('sidebar-collapsed'),
+      ).toBe(true);
+      expect(
+        view.container
+          .querySelector<HTMLButtonElement>('.sidebar-toggle-button')
+          ?.getAttribute('aria-label'),
+      ).toBe('Expand sidebar');
+    });
+
+    await act(async () => {
+      view.container.querySelector<HTMLButtonElement>('.sidebar-toggle-button')?.click();
+    });
+    expect(
+      view.container.querySelector('.app-shell')?.classList.contains('sidebar-collapsed'),
+    ).toBe(false);
+    expect(
+      JSON.parse(window.localStorage.getItem('codiff:web-review-surface-preferences:v1') ?? '{}'),
+    ).toEqual({ sidebarCollapsed: false });
+
+    await using persistedView = await renderReact(
+      <ReviewSurface snapshot={sharedWalkthroughSnapshot} />,
+    );
+    await waitFor(() => {
+      expect(
+        persistedView.container
+          .querySelector('.app-shell')
+          ?.classList.contains('sidebar-collapsed'),
+      ).toBe(false);
+    });
+  } finally {
+    window.localStorage.clear();
+    matchMedia.mockRestore();
+  }
+});
+
+test('a resolved general discussion stays collapsed unless its hash targets the thread', async () => {
+  let finishResolve: (() => void) | null = null;
+  const onResolveDiscussion = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishResolve = resolve;
+      }),
+  );
+  const resolvedSnapshot = {
+    ...sharedWalkthroughSnapshot,
+    repository: {
+      ...sharedWalkthroughSnapshot.repository,
+      generalComments: [
+        {
+          canReply: true,
+          canResolve: true,
+          comments: [
+            {
+              author: { login: 'reviewer' },
+              body: 'This conversation is resolved.',
+              id: 'gitlab:200',
+              url: 'https://gitlab.example.com/group/project/-/merge_requests/1#note_200',
+            },
+          ],
+          id: 'general-discussion',
+          isResolved: true,
+        },
+      ],
     },
   } satisfies SharedWalkthroughSnapshot;
 
+  window.history.replaceState(null, '', '/review');
+  await using collapsedView = await renderReact(
+    <ReviewSurface
+      commenting={{ ...commenting, canComment: true, onResolveDiscussion }}
+      initialMode="comments"
+      snapshot={resolvedSnapshot}
+    />,
+  );
+  expect(
+    collapsedView.container
+      .querySelector<HTMLButtonElement>('.resolved-thread-toggle')
+      ?.getAttribute('aria-expanded'),
+  ).toBe('false');
+  expect(collapsedView.container.querySelector('.resolved-thread-content')).toBeNull();
+
+  window.history.replaceState(null, '', '/review#general-discussion');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  await waitFor(() => {
+    expect(
+      collapsedView.container
+        .querySelector<HTMLButtonElement>('.resolved-thread-toggle')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(collapsedView.container.textContent).toContain('This conversation is resolved.');
+  });
+
+  const reopen = [...collapsedView.container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === 'Reopen',
+  );
+  await act(async () => reopen?.click());
+  expect(onResolveDiscussion).toHaveBeenCalledWith('general-discussion', false);
+  expect(collapsedView.container.querySelector('.resolved-thread-toggle')).toBeNull();
+  expect(
+    [...collapsedView.container.querySelectorAll<HTMLButtonElement>('button')].some(
+      (button) => button.textContent === 'Reply',
+    ),
+  ).toBe(false);
+
+  await act(async () => finishResolve?.());
+  expect(
+    [...collapsedView.container.querySelectorAll<HTMLButtonElement>('button')].some(
+      (button) => button.textContent === 'Reply',
+    ),
+  ).toBe(true);
+  window.history.replaceState(null, '', '/');
+});
+
+test('a resolved inline discussion expands when its note hash is targeted', async () => {
+  const resolvedSnapshot = {
+    ...sharedWalkthroughSnapshot,
+    reviewComments: [
+      {
+        author: { login: 'reviewer' },
+        body: 'This inline conversation is resolved.',
+        canResolveThread: true,
+        filePath: 'src/app.ts',
+        id: 'gitlab:99',
+        isThreadResolved: true,
+        lineNumber: 1,
+        side: 'additions',
+        threadId: 'line-discussion',
+        url: 'https://gitlab.example.com/group/project/-/merge_requests/1#note_99',
+      },
+    ],
+  } satisfies SharedWalkthroughSnapshot;
+
+  window.history.replaceState(null, '', '/review#note_99');
+  await using view = await renderReact(
+    <ReviewSurface commenting={commenting} initialMode="tree" snapshot={resolvedSnapshot} />,
+  );
+
+  await waitFor(() => {
+    expect(
+      view.container
+        .querySelector<HTMLButtonElement>('.resolved-thread-toggle')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(view.container.textContent).toContain('This inline conversation is resolved.');
+  });
+  window.history.replaceState(null, '', '/');
+});
+
+test('share viewer shows the complete repository path when there is no repository link', async () => {
   const container = document.createElement('div');
   document.body.append(container);
   let root: Root | null = null;
@@ -142,7 +343,9 @@ test('share viewer shows the complete repository path when there is no repositor
   };
   await act(async () => {
     root = createRoot(container);
-    root.render(<ReviewSurface snapshot={snapshot} title="Review shared walkthrough" />);
+    root.render(
+      <ReviewSurface snapshot={sharedWalkthroughSnapshot} title="Review shared walkthrough" />,
+    );
   });
 
   await waitFor(() => {

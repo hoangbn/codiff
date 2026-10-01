@@ -66,9 +66,10 @@ import {
   type WalkthroughNote,
 } from './lib/app-types.ts';
 import {
-  isPatchOnlyDiffSection,
+  getFailedSectionLoadState,
   shouldLoadDiffSectionContents,
   shouldPreloadSectionContentsForSearch,
+  updateDiffSection,
 } from './lib/diff.ts';
 import { sortFiles, splitRepositoryPath } from './lib/files.ts';
 import {
@@ -85,6 +86,7 @@ import {
 import { resolveReviewCommandTarget } from './lib/review-command-target.ts';
 import {
   buildReviewCommentsMarkdown,
+  getRefreshedReviewComments,
   getReviewCommentsFromState,
   getVisibleReviewComments,
 } from './lib/review-comments.ts';
@@ -115,6 +117,7 @@ import type {
   CodiffMarkdownDocument,
   CodiffPreferences,
   CodiffUpdateStatus,
+  DefinitionCandidate,
   GitIdentity,
   HistoryEntry,
   OpenReviewSourceKind,
@@ -127,24 +130,6 @@ import type {
 const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
 const emptyWalkthroughNotes = new Map<string, WalkthroughNote>();
 const disableCodeViewWorkerPool = process.env.NODE_ENV === 'test';
-
-const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
-  isPatchOnlyDiffSection(section)
-    ? {
-        ...section,
-        summary: {
-          canLoad: false,
-          reason: 'Codiff could not load full file context.',
-        },
-      }
-    : {
-        ...section,
-        loadState: 'error',
-        summary: {
-          canLoad: false,
-          reason: 'Codiff could not load this file.',
-        },
-      };
 
 const getPreferencesFromConfig = ({ settings }: CodiffConfig): CodiffPreferences => ({
   ...settings,
@@ -220,7 +205,7 @@ export default function App() {
   const sourceSessionsRef = useRef<Map<string, SourceSession>>(new Map());
   const stateRef = useRef<RepositoryState | null>(null);
   const collapsedRef = useRef<Set<string>>(new Set());
-  const expandedGeneratedRef = useRef<Set<string>>(new Set());
+  const expandedReviewKeysRef = useRef<Set<string>>(new Set());
   const preferencesRef = useRef<CodiffPreferences>(defaultPreferences);
   const selectedPathRef = useRef<string | null>(null);
   const sourceRequestRef = useRef(0);
@@ -236,11 +221,11 @@ export default function App() {
   const {
     bumpItemVersion,
     collapsed,
-    expandedGenerated,
+    expandedReviewKeys,
     itemVersionByKey,
     selectedPath,
     setCollapsed,
-    setExpandedGenerated,
+    setExpandedReviewKeys,
     setItemVersionByKey,
     setSelectedPath,
     setViewed,
@@ -289,6 +274,7 @@ export default function App() {
     collapseThreshold: SIDEBAR_COLLAPSE_THRESHOLD,
     onCollapse: collapseSidebar,
     onWidthCommit: writeSidebarWidth,
+    position: preferences.sidebarPosition,
     readWidth: readSidebarWidth,
   });
   const {
@@ -410,16 +396,7 @@ export default function App() {
 
             return {
               ...current,
-              files: current.files.map((candidate) =>
-                candidate.path === file.path
-                  ? {
-                      ...candidate,
-                      sections: candidate.sections.map((candidateSection) =>
-                        candidateSection.id === section.id ? loadedSection : candidateSection,
-                      ),
-                    }
-                  : candidate,
-              ),
+              files: updateDiffSection(current.files, file, section, () => loadedSection),
             };
           });
           bumpItemVersion(file.path);
@@ -437,18 +414,7 @@ export default function App() {
 
             return {
               ...current,
-              files: current.files.map((candidate) =>
-                candidate.path === file.path
-                  ? {
-                      ...candidate,
-                      sections: candidate.sections.map((candidateSection) =>
-                        candidateSection.id === section.id
-                          ? getFailedSectionLoadState(candidateSection)
-                          : candidateSection,
-                      ),
-                    }
-                  : candidate,
-              ),
+              files: updateDiffSection(current.files, file, section, getFailedSectionLoadState),
             };
           });
           bumpItemVersion(file.path);
@@ -531,7 +497,7 @@ export default function App() {
           stateRef.current = orderedState;
           setState(orderedState);
           setLocalChangesDetected(false);
-          setReviewComments(getReviewCommentsFromState(orderedState));
+          setReviewComments((current) => getRefreshedReviewComments(orderedState, current));
           if (walkthroughNeedsRefresh) {
             refreshWalkthroughForState(orderedState);
           }
@@ -596,7 +562,7 @@ export default function App() {
 
     sourceSessionsRef.current.set(getSourceKey(currentState.source), {
       collapsed: new Set(collapsedRef.current),
-      expandedGenerated: new Set(expandedGeneratedRef.current),
+      expandedReviewKeys: new Set(expandedReviewKeysRef.current),
       narrativeWalkthrough: narrativeWalkthroughRef.current,
       reviewComments: reviewCommentsRef.current,
       selectedPath: selectedPathRef.current,
@@ -765,7 +731,7 @@ export default function App() {
       setState(orderedState);
       setLoadError(null);
       setCollapsed(getCollapsedViewedPaths(orderedState.files, nextViewed));
-      setExpandedGenerated(new Set());
+      setExpandedReviewKeys(new Set());
       setItemVersionByKey({});
       resetCommentFocus();
       setReloadDeltaPaths(nextReloadDeltaPaths);
@@ -798,7 +764,7 @@ export default function App() {
     resetCommentFocus,
     scrollPathIntoReview,
     setCollapsed,
-    setExpandedGenerated,
+    setExpandedReviewKeys,
     setItemVersionByKey,
     setMainMode,
     setNarrativeWalkthrough,
@@ -942,15 +908,11 @@ export default function App() {
 
             return {
               ...current,
-              files: current.files.map((file) =>
-                file.path === request.file.path
-                  ? {
-                      ...file,
-                      sections: file.sections.map((candidate) =>
-                        candidate.id === request.section.id ? loadedSection : candidate,
-                      ),
-                    }
-                  : file,
+              files: updateDiffSection(
+                current.files,
+                request.file,
+                request.section,
+                () => loadedSection,
               ),
             };
           });
@@ -970,17 +932,11 @@ export default function App() {
 
             return {
               ...current,
-              files: current.files.map((file) =>
-                file.path === request.file.path
-                  ? {
-                      ...file,
-                      sections: file.sections.map((candidate) =>
-                        candidate.id === request.section.id
-                          ? getFailedSectionLoadState(candidate)
-                          : candidate,
-                      ),
-                    }
-                  : file,
+              files: updateDiffSection(
+                current.files,
+                request.file,
+                request.section,
+                getFailedSectionLoadState,
               ),
             };
           });
@@ -1076,7 +1032,7 @@ export default function App() {
           setReviewComments(getReviewCommentsFromState(orderedState));
           setViewed(nextViewed);
           setCollapsed(getCollapsedViewedPaths(orderedState.files, nextViewed));
-          setExpandedGenerated(new Set());
+          setExpandedReviewKeys(new Set());
           setLoadError(null);
         })
         .catch((error: unknown) => {
@@ -1093,7 +1049,7 @@ export default function App() {
     };
   }, [
     setCollapsed,
-    setExpandedGenerated,
+    setExpandedReviewKeys,
     setItemVersionByKey,
     refreshWalkthroughForState,
     setReviewComments,
@@ -1132,8 +1088,8 @@ export default function App() {
   }, [collapsed]);
 
   useEffect(() => {
-    expandedGeneratedRef.current = expandedGenerated;
-  }, [expandedGenerated]);
+    expandedReviewKeysRef.current = expandedReviewKeys;
+  }, [expandedReviewKeys]);
 
   useEffect(() => {
     preferencesRef.current = preferences;
@@ -1434,7 +1390,7 @@ export default function App() {
               : (orderedState.files[0]?.path ?? null);
           const nextCollapsed =
             session?.collapsed ?? getCollapsedViewedPaths(orderedState.files, nextViewed);
-          const nextExpandedGenerated = session?.expandedGenerated ?? new Set<string>();
+          const nextExpandedReviewKeys = session?.expandedReviewKeys ?? new Set<string>();
           const sessionWalkthroughIsCurrent =
             session?.narrativeWalkthrough != null &&
             !haveChangedFiles(session.walkthroughFiles, orderedState.files);
@@ -1447,7 +1403,7 @@ export default function App() {
           setState(orderedState);
           setHistorySource(getHistorySource(orderedState.source) ?? historySource);
           setCollapsed(new Set(nextCollapsed));
-          setExpandedGenerated(new Set(nextExpandedGenerated));
+          setExpandedReviewKeys(new Set(nextExpandedReviewKeys));
           setItemVersionByKey({});
           setReviewComments(session?.reviewComments ?? getReviewCommentsFromState(orderedState));
           setReloadDeltaPaths(new Set());
@@ -1486,7 +1442,7 @@ export default function App() {
       resetDiffSearch,
       saveCurrentSourceSession,
       setCollapsed,
-      setExpandedGenerated,
+      setExpandedReviewKeys,
       setItemVersionByKey,
       setMainMode,
       setNarrativeWalkthrough,
@@ -1717,7 +1673,7 @@ export default function App() {
     diffLineHeight,
     diffStyle,
     disableWorkerPool: disableCodeViewWorkerPool,
-    expandedGenerated,
+    expandedReviewKeys,
     focusCommentId,
     focusCommentRequest,
     gitIdentity,
@@ -1729,9 +1685,13 @@ export default function App() {
     onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
+    onFindDefinitions: window.codiff.findDefinitions,
     onLoadImageContent: window.codiff.getDiffImageContent,
     onLoadSection: loadDiffSection,
     onLoadSectionContents: loadDiffSectionContents,
+    onOpenDefinition: (candidate: DefinitionCandidate) => {
+      void window.codiff.openFile(candidate.path, candidate.lineNumber).catch(() => {});
+    },
     onOpenFile: openFile,
     onRefreshMarkdown: refreshMarkdownFile,
     onSaveCommentEdit: updateComment,
@@ -1797,10 +1757,18 @@ export default function App() {
   return (
     <div
       className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${
-        isWindowFullScreen ? ' window-fullscreen' : ''
-      }`}
+        commandBarVisible ? ' command-bar-open' : ''
+      }${isWindowFullScreen ? ' window-fullscreen' : ''}`}
+      data-sidebar-position={preferences.sidebarPosition}
       style={
-        sidebarCollapsed ? undefined : { gridTemplateColumns: `${sidebarWidth}px 0 minmax(0, 1fr)` }
+        sidebarCollapsed
+          ? undefined
+          : {
+              gridTemplateColumns:
+                preferences.sidebarPosition === 'right'
+                  ? `minmax(0, 1fr) 0 ${sidebarWidth}px`
+                  : `${sidebarWidth}px 0 minmax(0, 1fr)`,
+            }
       }
     >
       <div aria-hidden className="window-drag-region" />
@@ -1813,30 +1781,35 @@ export default function App() {
             showWhitespace={showWhitespace}
           />
         }
-        center={
-          state.branch ? (
-            <span className="review-top-bar-branch" title={state.branch}>
-              {state.branch}
-            </span>
-          ) : null
-        }
         context={
-          sidebarSourceLabel ? (
-            pullRequestUrl ? (
-              <a
-                className="review-top-bar-source"
-                href={pullRequestUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <span>{sidebarSourceLabel}</span>
-                <ArrowSquareOut aria-hidden size={14} weight="bold" />
-              </a>
-            ) : (
-              <span className="review-top-bar-source">{sidebarSourceLabel}</span>
-            )
-          ) : null
+          <>
+            {state.branch ? (
+              <span className="review-top-bar-branch" title={state.branch}>
+                {state.branch}
+              </span>
+            ) : null}
+            {sidebarSourceLabel ? (
+              pullRequestUrl ? (
+                <a
+                  className="review-top-bar-source"
+                  href={pullRequestUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  <span className="review-top-bar-source-label">{sidebarSourceLabel}</span>
+                  <ArrowSquareOut aria-hidden size={14} weight="bold" />
+                </a>
+              ) : (
+                <span className="review-top-bar-source">
+                  <span className="review-top-bar-source-label">{sidebarSourceLabel}</span>
+                </span>
+              )
+            ) : null}
+          </>
         }
+        mode={sidebarMode}
+        modes={reviewModes}
+        onModeChange={changeSidebarMode}
         onToggleSidebar={toggleSidebar}
         repository={
           <span className="review-top-bar-repository review-top-bar-repository-path">
@@ -1846,6 +1819,7 @@ export default function App() {
         }
         repositoryTooltip={state.root}
         sidebarCollapsed={sidebarCollapsed}
+        sidebarPosition={preferences.sidebarPosition}
         sourceMenu={
           <OpenReviewSourceMenu
             onOpen={showOpenReviewSourceDialog}
@@ -1920,12 +1894,10 @@ export default function App() {
           historyLoading={historyLoading}
           keymap={codiffConfig.keymap}
           mode={sidebarMode}
-          modes={reviewModes}
           narrativeNavigation={narrativeNavigation}
           narrativeWalkthrough={narrativeWalkthrough}
           onActivatePath={activatePath}
           onLoadMoreHistory={loadMoreHistory}
-          onModeChange={changeSidebarMode}
           onSearchQueryChange={
             sidebarMode === 'history' ? setHistorySearchQuery : setFileSearchQuery
           }

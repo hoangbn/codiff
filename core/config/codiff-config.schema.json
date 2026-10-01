@@ -56,7 +56,7 @@
         "editorCommand": {
           "type": "string",
           "default": "",
-          "description": "Command used to open files from Codiff. Use {file} as the file path placeholder and {repo} as the repository root placeholder, for example \"subl \\\"{repo}\\\" \\\"{file}\\\"\", or leave empty to use Codiff's default editor lookup."
+          "description": "Command used to open files from Codiff. Use {file} as the file path placeholder, {line} as the optional line number, and {repo} as the repository root placeholder, for example \"subl \\\"{repo}\\\" \\\"{file}\\\"\", or leave empty to use Codiff's default editor lookup."
         },
         "lastRepositoryPath": {
           "type": "string",
@@ -82,6 +82,12 @@
           "type": "string",
           "default": "# Address these Review Comments",
           "description": "Markdown prefix prepended to copied review comments. Set to an empty string to omit the heading entirely."
+        },
+        "sidebarPosition": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "default": "left",
+          "description": "Side of the desktop window where the file sidebar appears."
         },
         "showOutdated": {
           "type": "boolean",
@@ -118,7 +124,7 @@
       "properties": {
         "commandBar": {
           "type": "string",
-          "default": "Mod+Shift+p",
+          "default": "Mod+k",
           "description": "Open the command palette."
         },
         "diffSearch": {
@@ -148,7 +154,7 @@
         },
         "openFile": {
           "type": "string",
-          "default": "Mod+k",
+          "default": "Mod+Shift+o",
           "description": "Open the currently selected file in the configured editor."
         },
         "prevSearchMatch": {

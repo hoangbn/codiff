@@ -4,7 +4,7 @@ import type { CodiffDiffStyle } from './config/types.ts';
 export type DiffSection = {
   binary: boolean;
   id: string;
-  kind: 'commit' | 'pull-request' | 'staged' | 'unstaged';
+  kind: 'combined' | 'commit' | 'pull-request' | 'staged' | 'unstaged';
   loadState?: 'binary' | 'deferred' | 'directory' | 'error' | 'ready' | 'too-large';
   newFile?: {
     cacheKey?: string;
@@ -65,6 +65,7 @@ export type PullRequestReviewStatus = {
   approve?: PullRequestReviewActionStatus;
   close?: PullRequestReviewActionStatus;
   comment?: PullRequestReviewActionStatus;
+  markReady?: PullRequestReviewActionStatus;
   requestChanges?: PullRequestReviewActionStatus;
 };
 
@@ -155,10 +156,12 @@ export type ReviewSource =
     }
   | {
       author?: ReviewAuthor;
+      baseSha?: string;
       canEditDescription?: boolean;
       canEditReviewers?: boolean;
       canEditTitle?: boolean;
       description?: string;
+      draft?: boolean;
       headSha?: string;
       host?: string;
       mergeState?: PullRequestMergeState;
@@ -718,6 +721,35 @@ export type DiffSectionContentRequest = {
   source?: ReviewSource;
 };
 
+export type DefinitionSearchRequest = {
+  identifier: string;
+  kind: DiffSection['kind'];
+  lineNumber: number;
+  path: string;
+  side: 'additions' | 'deletions';
+  source: ReviewSource;
+};
+
+export type DefinitionCandidate = {
+  canOpenInEditor: boolean;
+  kind: string;
+  line: string;
+  lineNumber: number;
+  path: string;
+  side: 'additions' | 'deletions';
+};
+
+export type DefinitionSearchResult =
+  | {
+      candidates: ReadonlyArray<DefinitionCandidate>;
+      identifier: string;
+      status: 'ready';
+    }
+  | {
+      reason: string;
+      status: 'unavailable';
+    };
+
 export type DiffImageContentRequest = {
   kind: DiffSection['kind'];
   path: string;
@@ -759,6 +791,7 @@ export type CodiffPreferences = {
   reviewCommentsPrefix: string;
   showOutdated: boolean;
   showWhitespace: boolean;
+  sidebarPosition: 'left' | 'right';
   theme: CodiffTheme;
   walkthroughPrompt: string;
   wordWrap: boolean;
@@ -769,13 +802,19 @@ export type ReviewPreferences = Pick<
   'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
 >;
 
-export type CodiffUpdatePhase = 'available' | 'error' | 'idle' | 'installerReady' | 'updating';
+export type CodiffUpdatePhase =
+  | 'available'
+  | 'error'
+  | 'idle'
+  | 'installerReady'
+  | 'updated'
+  | 'updating';
 
 export type CodiffUpdateStatus = {
   currentVersion: string;
   message?: string;
   phase: CodiffUpdatePhase;
-  strategy?: 'download' | 'manual' | 'squirrel';
+  strategy?: 'download' | 'fork' | 'manual' | 'squirrel';
   version?: string;
 };
 

@@ -1,6 +1,6 @@
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { beforeEach, expect, test } from 'vite-plus/test';
 import {
   createTemporaryDirectory,
@@ -15,12 +15,14 @@ const {
   CODEX_NOT_FOUND_CODE,
   DEFAULT_OPENAI_MODEL,
   getCodexCommand,
+  getCodexInstallPaths,
   normalizeOpenAIModel,
   runCodex,
 } = require('../codex.cjs') as {
   CODEX_NOT_FOUND_CODE: string;
   DEFAULT_OPENAI_MODEL: string;
-  getCodexCommand: () => string;
+  getCodexCommand: (installPaths?: ReadonlyArray<string>) => string;
+  getCodexInstallPaths: (platform: NodeJS.Platform, home: string) => string[];
   normalizeOpenAIModel: (value: unknown) => string;
   runCodex: (
     repoRoot: string,
@@ -86,10 +88,14 @@ beforeEach(() => {
 });
 
 test('normalizes OpenAI model preferences to known models', () => {
+  expect(normalizeOpenAIModel('gpt-6-astra')).toBe('gpt-6-astra');
+  expect(normalizeOpenAIModel('gpt-6-sol')).toBe('gpt-6-sol');
+  expect(normalizeOpenAIModel('gpt-6-luna')).toBe('gpt-6-luna');
   expect(normalizeOpenAIModel('gpt-5.6-sol')).toBe('gpt-5.6-sol');
   expect(normalizeOpenAIModel('gpt-5.6-terra')).toBe('gpt-5.6-terra');
   expect(normalizeOpenAIModel('gpt-5.6-luna')).toBe('gpt-5.6-luna');
   expect(normalizeOpenAIModel('gpt-5.5')).toBe('gpt-5.5');
+  expect(normalizeOpenAIModel('gpt-5.3-codex-spark')).toBe(DEFAULT_OPENAI_MODEL);
   expect(normalizeOpenAIModel('gpt-5.4-mini')).toBe(DEFAULT_OPENAI_MODEL);
   expect(normalizeOpenAIModel('gpt-5.3-codex')).toBe(DEFAULT_OPENAI_MODEL);
   expect(normalizeOpenAIModel('gpt-4o')).toBe(DEFAULT_OPENAI_MODEL);
@@ -106,6 +112,24 @@ test('rejects invalid explicit Codex CLI overrides', async () => {
   } catch (error) {
     expect(error).toMatchObject({ code: CODEX_NOT_FOUND_CODE });
   }
+});
+
+test('resolves the ChatGPT app CLI without a codex command on PATH', async () => {
+  await using directory = await createTemporaryDirectory('codiff-chatgpt-cli-');
+  const bundledCLI = join(directory.path, 'Applications/ChatGPT.app/Contents/Resources/codex');
+  await mkdir(dirname(bundledCLI), { recursive: true });
+  await writeFile(bundledCLI, '#!/bin/sh\n');
+  await chmod(bundledCLI, 0o755);
+  await using _environment = createTemporaryEnvironment({
+    CODIFF_CODEX_PATH: undefined,
+    PATH: directory.path,
+  });
+
+  // Keep the test hermetic when a real CLI is installed in /Applications.
+  const macOSInstallPaths = getCodexInstallPaths('darwin', directory.path);
+  expect(macOSInstallPaths).toContain('/Applications/ChatGPT.app/Contents/Resources/codex');
+  const installPaths = macOSInstallPaths.filter((path: string) => path.startsWith(directory.path));
+  expect(getCodexCommand(installPaths)).toBe(bundledCLI);
 });
 
 test.skipIf(process.platform !== 'darwin')(
@@ -178,6 +202,31 @@ test('retries unavailable GPT-5.6 models with model-specific reasoning', async (
     'gpt-5.5|model_reasoning_effort="low"',
   ]);
   expect(fallbacks).toEqual([['gpt-5.5', 'gpt-5.6-sol']]);
+});
+
+test('retries unavailable GPT-6 models with Terra before GPT-5.5', async () => {
+  const attempts: Array<string> = [];
+  const { transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => {
+      const model = getArgumentValue(commandProcess.args, '-m') || '';
+      attempts.push(model);
+      if (model === 'gpt-6-sol') {
+        commandProcess.stderr(`You do not have access to model ${model}.`);
+        commandProcess.close(1);
+      } else {
+        void completeCodexExec(commandProcess);
+      }
+    });
+  });
+
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      model: 'gpt-6-sol',
+    }),
+  ).resolves.toBe('{"version":1}');
+
+  expect(attempts).toEqual(['gpt-6-sol', 'gpt-5.6-terra']);
 });
 
 test('streams Codex app-server reasoning and message deltas as semantic progress', async () => {

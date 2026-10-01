@@ -8,18 +8,22 @@ import type { ChangedFile, ReviewSource } from '../../types.ts';
 export type { ReviewDiffBlock } from '../../app/components/ReviewCodeView.tsx';
 
 const codeViewMockState = vi.hoisted(() => ({
-  lastItems: [] as ReadonlyArray<{ id: string; type: string; version?: unknown }>,
+  hiddenAnnotationItemIds: new Set<string>(),
+  lastItems: [] as ReadonlyArray<CodeViewItem<unknown>>,
   lastOptions: null as Record<string, unknown> | null,
   postRenderNodes: [] as Array<HTMLElement>,
   renderCount: 0,
+  renderedElements: new Map<string, HTMLElement>(),
   scrollTo: vi.fn(),
 }));
 export const codeViewMock = codeViewMockState;
 
 export const resetCodeViewMock = () => {
+  codeViewMock.hiddenAnnotationItemIds.clear();
   codeViewMock.lastItems = [];
   codeViewMock.lastOptions = null;
   codeViewMock.postRenderNodes = [];
+  codeViewMock.renderedElements.clear();
   codeViewMock.renderCount = 0;
   codeViewMock.scrollTo.mockClear();
 };
@@ -72,9 +76,13 @@ vi.mock('@pierre/diffs/react', async () => {
         () => ({
           getRenderedItems: () =>
             itemsRef.current
-              .filter((item) => renderedIdsRef.current.has(item.id))
+              .filter(
+                (item) =>
+                  renderedIdsRef.current.has(item.id) || codeViewMock.renderedElements.has(item.id),
+              )
               .map((item) => ({
-                element: document.createElement('div'),
+                element:
+                  codeViewMock.renderedElements.get(item.id) ?? document.createElement('div'),
                 id: item.id,
                 instance: {},
                 item,
@@ -128,7 +136,9 @@ vi.mock('@pierre/diffs/react', async () => {
             customHeader == null
               ? null
               : React.createElement('div', { slot: 'header-custom' }, customHeader),
-            'annotations' in item && Array.isArray(item.annotations)
+            !codeViewMock.hiddenAnnotationItemIds.has(item.id) &&
+              'annotations' in item &&
+              Array.isArray(item.annotations)
               ? item.annotations.map((annotation, index) =>
                   React.createElement(
                     React.Fragment,

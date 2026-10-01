@@ -1,6 +1,7 @@
 import { expect, test } from 'vite-plus/test';
 import {
   getWalkthroughBlockScrollTarget,
+  getWalkthroughKeyboardForwardIndex,
   getWalkthroughNavigationKeyDirection,
 } from '../app/components/walkthrough/NarrativeWalkthroughView.tsx';
 import { parseSectionDiffWithOptions } from '../lib/diff.ts';
@@ -14,6 +15,7 @@ import {
   getCommitSelectionPaths,
   getUncoveredWalkthroughFileLineItems,
   getUncoveredWalkthroughFiles,
+  getUncoveredWalkthroughReviewIdentity,
   getWalkthroughRunNote,
   isWalkthroughCommittable,
   resolveWalkthroughHunkFile,
@@ -21,6 +23,12 @@ import {
   walkthroughItemPaths,
   walkthroughItemTitleFallback,
 } from '../lib/narrative-walkthrough.ts';
+import {
+  getFileReviewIdentity,
+  getWalkthroughReviewIdentity,
+  isReviewIdentityViewed,
+  updateReviewIdentityViewed,
+} from '../lib/review-identity.ts';
 import type {
   ChangedFile,
   NarrativeWalkthrough,
@@ -217,23 +225,25 @@ test('walkthrough keyboard navigation ignores editor shortcut chords', () => {
   expect(getWalkthroughNavigationKeyDirection(keyEvent('j', { shiftKey: true }))).toBe(0);
 });
 
+test('walkthrough keyboard navigation enters the first stop before advancing', () => {
+  expect(getWalkthroughKeyboardForwardIndex({ index: 0, scrollRequest: 0 })).toBe(0);
+  expect(getWalkthroughKeyboardForwardIndex({ index: 0, scrollRequest: 1 })).toBe(1);
+  expect(getWalkthroughKeyboardForwardIndex({ index: 1, scrollRequest: 1 })).toBe(2);
+});
+
 test('walkthrough scrolling skips the initial stop but keeps explicit navigation', () => {
   expect(
     getWalkthroughBlockScrollTarget({
       activeBlockId: 'walkthrough:first',
       firstSupportBlockId: null,
-      mode: 'stop',
-      stopScrollRequest: 0,
-      supportScrollRequest: 0,
+      scrollTarget: { index: 0, kind: 'stop', nonce: 0 },
     }),
   ).toBeNull();
   expect(
     getWalkthroughBlockScrollTarget({
       activeBlockId: 'walkthrough:first',
       firstSupportBlockId: null,
-      mode: 'stop',
-      stopScrollRequest: 1,
-      supportScrollRequest: 0,
+      scrollTarget: { index: 0, kind: 'stop', nonce: 1 },
     }),
   ).toEqual({
     behavior: 'smooth',
@@ -244,14 +254,38 @@ test('walkthrough scrolling skips the initial stop but keeps explicit navigation
     getWalkthroughBlockScrollTarget({
       activeBlockId: 'walkthrough:first',
       firstSupportBlockId: 'walkthrough:support',
-      mode: 'support',
-      stopScrollRequest: 0,
-      supportScrollRequest: 1,
+      scrollTarget: { index: 0, kind: 'support', nonce: 2 },
     }),
   ).toEqual({
     behavior: 'smooth',
     blockId: 'walkthrough:support',
-    request: 1,
+    request: 2,
+  });
+});
+
+test('walkthrough scroll targets track explicit navigation, not scroll-derived mode', () => {
+  // A stop was clicked (nonce 3); scrolling into the support region flips the
+  // mode but must not surface a support target with a fresh request.
+  const stopTarget = getWalkthroughBlockScrollTarget({
+    activeBlockId: 'walkthrough:first',
+    firstSupportBlockId: 'walkthrough:support',
+    scrollTarget: { index: 0, kind: 'stop', nonce: 3 },
+  });
+  expect(stopTarget).toEqual({
+    behavior: 'smooth',
+    blockId: 'walkthrough:first',
+    request: 3,
+  });
+  expect(
+    getWalkthroughBlockScrollTarget({
+      activeBlockId: null,
+      firstSupportBlockId: 'walkthrough:support',
+      scrollTarget: { index: 0, kind: 'support', nonce: 4 },
+    }),
+  ).toEqual({
+    behavior: 'smooth',
+    blockId: 'walkthrough:support',
+    request: 4,
   });
 });
 
@@ -775,6 +809,13 @@ test('uncovered walkthrough files preserve uncovered hunks from partially covere
 
   const uncoveredFiles = getUncoveredWalkthroughFiles([file], view, false);
 
+  const coveredIdentity = getWalkthroughReviewIdentity(file, [`${section.id}:h1`]);
+  const uncoveredIdentity = getUncoveredWalkthroughReviewIdentity(file, view, false);
+  expect(uncoveredIdentity.coverage?.hunkIds).toEqual([`${section.id}:h2`, `${section.id}:h3`]);
+  let viewed = updateReviewIdentityViewed({}, uncoveredIdentity, false);
+  expect(isReviewIdentityViewed(viewed, getFileReviewIdentity(file))).toBe(false);
+  viewed = updateReviewIdentityViewed(viewed, coveredIdentity, false);
+  expect(isReviewIdentityViewed(viewed, getFileReviewIdentity(file))).toBe(true);
   expect(uncoveredFiles).toHaveLength(1);
   expect(uncoveredFiles[0].sections).toHaveLength(1);
   expect(uncoveredFiles[0].sections[0].patch).not.toContain('favorite.drag()');
@@ -1059,6 +1100,30 @@ test('resolveWalkthroughHunkRuns groups adjacent same-file hunks without reorder
     ['database_search.py:unstaged:h1', 'database_search.py:unstaged:h3'],
     ['other.py:unstaged:h1'],
   ]);
+});
+
+test('resolveWalkthroughHunkRuns splits backward hunks while preserving authored order', () => {
+  const file = multiHunkFile();
+  const section = file.sections[0];
+  const hunks = [3, 1, 2].map((ordinal) =>
+    hunk({
+      added: 1,
+      deleted: 1,
+      display: file.path,
+      id: `${section.id}:h${ordinal}`,
+      path: file.path,
+      sectionId: section.id,
+      status: file.status,
+    }),
+  );
+
+  const runs = resolveWalkthroughHunkRuns(group({ hunks, id: 'backward' }), [file]);
+
+  expect(runs.map((run) => run.hunks.map((hunk) => hunk.id))).toEqual([
+    [`${section.id}:h3`],
+    [`${section.id}:h1`, `${section.id}:h2`],
+  ]);
+  expect(runs.flatMap((run) => run.hunks)).toEqual(hunks);
 });
 
 test('getWalkthroughRunNote combines header notes for grouped hunks', () => {

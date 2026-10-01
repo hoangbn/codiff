@@ -48,29 +48,6 @@ class StubWorker extends EventTarget {
 }
 reactActEnvironment.Worker ??= StubWorker as unknown as typeof Worker;
 
-const createMemoryStorage = (): Storage => {
-  const values = new Map<string, string>();
-  return {
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => Array.from(values.keys())[index] ?? null,
-    get length() {
-      return values.size;
-    },
-    removeItem: (key) => values.delete(key),
-    setItem: (key, value) => values.set(key, value),
-  };
-};
-
-Object.defineProperty(globalThis, 'localStorage', {
-  configurable: true,
-  value: createMemoryStorage(),
-});
-Object.defineProperty(globalThis, 'sessionStorage', {
-  configurable: true,
-  value: createMemoryStorage(),
-});
-
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -154,6 +131,11 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
     currentVersion: '1.9.2',
     phase: 'idle' as const,
   })),
+  findDefinitions: vi.fn(async (request) => ({
+    candidates: [],
+    identifier: request.identifier,
+    status: 'ready' as const,
+  })),
   getAgentSkillStatus: vi.fn(async () => ({
     installed: true,
     path: '/Users/reviewer/.codex/skills/codiff',
@@ -206,6 +188,7 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
     reviewCommentsPrefix: defaultSettings.reviewCommentsPrefix,
     showOutdated: false,
     showWhitespace: false,
+    sidebarPosition: defaultSettings.sidebarPosition,
     theme: 'system' as const,
     walkthroughPrompt: defaultSettings.walkthroughPrompt,
     wordWrap: false,
@@ -339,9 +322,11 @@ const createNarrativeWalkthroughFixture = (
     version: 4,
   }) satisfies NarrativeWalkthrough;
 
-const dispatchModK = () => {
+const dispatchModifiedKey = (key: string, shiftKey = false) => {
   const isMac = navigator.platform.toLowerCase().includes('mac');
-  window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: !isMac, key: 'k', metaKey: isMac }));
+  window.dispatchEvent(
+    new KeyboardEvent('keydown', { ctrlKey: !isMac, key, metaKey: isMac, shiftKey }),
+  );
 };
 
 const renderAppForOpenFileShortcut = async (file: ChangedFile) => {
@@ -369,6 +354,7 @@ const renderAppForOpenFileShortcut = async (file: ChangedFile) => {
   });
 
   return {
+    container,
     openFile,
     async [Symbol.asyncDispose]() {
       await act(async () => root.unmount());
@@ -405,6 +391,22 @@ test('code font preferences update root CSS variables', async () => {
   container.remove();
 });
 
+test('desktop app places the sidebar on the configured side', async () => {
+  const nextConfig = createDefaultConfig();
+  nextConfig.settings.sidebarPosition = 'right';
+  window.codiff = createCodiffMock({
+    getConfig: vi.fn(async () => nextConfig),
+  });
+
+  await using app = await renderReact(<App />);
+
+  await waitFor(() => {
+    const shell = app.container.querySelector<HTMLElement>('.app-shell');
+    expect(shell?.dataset.sidebarPosition).toBe('right');
+    expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
+  });
+});
+
 test('empty code font family removes the root CSS variable', async () => {
   document.documentElement.style.setProperty('--font-diff-mono', 'stale');
   window.codiff = createCodiffMock();
@@ -438,13 +440,12 @@ test('stale persisted collapsed sidebar state does not hide the sidebar on launc
       false,
     );
     expect(app.container.querySelector('.sidebar')).not.toBeNull();
-    expect(app.container.querySelector('.sidebar [role="tablist"]')).not.toBeNull();
+    expect(app.container.querySelector('.review-top-bar [role="tablist"]')).not.toBeNull();
   });
 
   const topBar = app.container.querySelector('.review-top-bar');
-  expect(topBar?.querySelector('[role="tablist"]')).toBeNull();
-  const modeControl = app.container.querySelector('.sidebar .review-mode-control');
-  expect(modeControl?.nextElementSibling?.className).toBe('sidebar-search-row');
+  expect(app.container.querySelector('.sidebar [role="tablist"]')).toBeNull();
+  const modeControl = topBar?.querySelector('.review-mode-control');
   const modes = modeControl?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [];
   expect([...modes].map((mode) => mode.textContent)).toEqual(['Walkthrough', 'Tree', 'History']);
   const sidebarToggle = topBar?.querySelector<HTMLButtonElement>('.sidebar-toggle-button');
@@ -552,7 +553,7 @@ test('repository label is plain text and clicking it does nothing', async () => 
   expect(openRepositoryFolder).not.toHaveBeenCalled();
 });
 
-test('the branch name renders in the center of the top bar', async () => {
+test('the branch name renders in the top bar context', async () => {
   window.codiff = createCodiffMock();
 
   await using app = await renderReact(<App />);
@@ -561,8 +562,7 @@ test('the branch name renders in the center of the top bar', async () => {
   const branch = app.container.querySelector<HTMLElement>('.review-top-bar-branch');
   expect(branch?.textContent).toBe('main');
   expect(branch?.getAttribute('title')).toBe('main');
-  expect(branch?.parentElement?.className).toBe('review-top-bar-center');
-  expect(app.container.querySelector('.review-top-bar-context .review-top-bar-branch')).toBeNull();
+  expect(branch?.parentElement?.className).toBe('review-top-bar-context');
 });
 
 test('empty repository state fills the review pane for centered layout', async () => {
@@ -720,7 +720,7 @@ test('repository reload restores the selected file when it still exists', async 
     expect(container.querySelector('.codiff-file-header')).not.toBeNull();
   });
   await act(async () => {
-    dispatchModK();
+    dispatchModifiedKey('O', true);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(openFile).toHaveBeenCalledWith(secondFile.path);
@@ -768,7 +768,7 @@ test('repository reload restores the selected file from the previous source', as
     expect(container.querySelector('.codiff-file-header')).not.toBeNull();
   });
   await act(async () => {
-    dispatchModK();
+    dispatchModifiedKey('O', true);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(openFile).toHaveBeenCalledWith(secondFile.path);
@@ -1279,18 +1279,33 @@ test('before unload saves the current source and selected file for any reload tr
   expect(getReloadSelectionPath(selection, nextState)).toBe(changedFile.path);
 });
 
-test('Mod+K opens the selected file in the editor', async () => {
+test('Mod+K opens the command bar', async () => {
   const changedFile = createChangedFile('src/app.ts');
   await using app = await renderAppForOpenFileShortcut(changedFile);
 
   await act(async () => {
-    dispatchModK();
+    dispatchModifiedKey('k');
+  });
+
+  expect(app.container.querySelector('.command-bar-input')).not.toBeNull();
+  expect(app.container.querySelector('.app-shell')?.classList.contains('command-bar-open')).toBe(
+    true,
+  );
+  expect(app.openFile).not.toHaveBeenCalled();
+});
+
+test('Mod+Shift+O opens the selected file in the editor', async () => {
+  const changedFile = createChangedFile('src/app.ts');
+  await using app = await renderAppForOpenFileShortcut(changedFile);
+
+  await act(async () => {
+    dispatchModifiedKey('O', true);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(app.openFile).toHaveBeenCalledWith(changedFile.path);
 });
 
-test('Mod+K does not open deleted files', async () => {
+test('Mod+Shift+O does not open deleted files', async () => {
   const deletedFile = {
     ...createChangedFile('src/removed.ts'),
     status: 'deleted',
@@ -1298,7 +1313,7 @@ test('Mod+K does not open deleted files', async () => {
   await using app = await renderAppForOpenFileShortcut(deletedFile);
 
   await act(async () => {
-    dispatchModK();
+    dispatchModifiedKey('O', true);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(app.openFile).not.toHaveBeenCalled();
@@ -2545,52 +2560,50 @@ test('closing plan mode flushes and returns a closed handoff', async () => {
       path: '/tmp/plan.md',
       version: 'plan-version',
     })),
-    getPlanReview: vi.fn(
-      async (): Promise<PlanReview> => ({
-        document: {
-          id: 'plan:/tmp/plan.md',
-          path: '/tmp/plan.md',
-          version: 'plan-version',
-        },
-        threads: [
-          {
-            anchor: {
-              block: {
-                fingerprint: 'heading-fingerprint',
-                path: [0],
-                text: 'Execute this plan',
-                type: 'heading',
-              },
-              kind: 'block',
-              version: 1,
+    getPlanReview: vi.fn(async (): Promise<PlanReview> => ({
+      document: {
+        id: 'plan:/tmp/plan.md',
+        path: '/tmp/plan.md',
+        version: 'plan-version',
+      },
+      threads: [
+        {
+          anchor: {
+            block: {
+              fingerprint: 'heading-fingerprint',
+              path: [0],
+              text: 'Execute this plan',
+              type: 'heading',
             },
-            createdAt: '2026-06-24T00:00:00.000Z',
-            createdBy: {
-              email: 'reviewer@example.com',
-              id: 'reviewer@example.com',
-              name: 'Reviewer',
-            },
-            id: 'thread-1',
-            messages: [
-              {
-                author: {
-                  email: 'reviewer@example.com',
-                  id: 'reviewer@example.com',
-                  name: 'Reviewer',
-                },
-                body: 'Keep this requirement.',
-                createdAt: '2026-06-24T00:00:00.000Z',
-                id: 'message-1',
-                updatedAt: '2026-06-24T00:00:00.000Z',
-              },
-            ],
-            status: 'open',
-            updatedAt: '2026-06-24T00:00:00.000Z',
+            kind: 'block',
+            version: 1,
           },
-        ],
-        version: 1,
-      }),
-    ),
+          createdAt: '2026-06-24T00:00:00.000Z',
+          createdBy: {
+            email: 'reviewer@example.com',
+            id: 'reviewer@example.com',
+            name: 'Reviewer',
+          },
+          id: 'thread-1',
+          messages: [
+            {
+              author: {
+                email: 'reviewer@example.com',
+                id: 'reviewer@example.com',
+                name: 'Reviewer',
+              },
+              body: 'Keep this requirement.',
+              createdAt: '2026-06-24T00:00:00.000Z',
+              id: 'message-1',
+              updatedAt: '2026-06-24T00:00:00.000Z',
+            },
+          ],
+          status: 'open',
+          updatedAt: '2026-06-24T00:00:00.000Z',
+        },
+      ],
+      version: 1,
+    })),
     onPlanCloseRequested: vi.fn((callback) => {
       requestClose = callback;
       return () => {
@@ -3764,4 +3777,79 @@ test('Pi not-found walkthrough errors show the agent recovery panel', async () =
   });
   expect(container.textContent).toContain('Pi CLI was not found.');
   expect(container.textContent).toContain('Review Files');
+});
+
+test('commit viewed progress synchronizes tree, walkthrough, and uncovered support without persistence', async () => {
+  const file = createChangedFile('src/app.ts', {
+    patch:
+      'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n@@ -10 +10 @@\n-before\n+after\n',
+  });
+  const source = { ref: 'abc1234', type: 'commit' } satisfies ReviewSource;
+  const walkthrough = {
+    ...createNarrativeWalkthroughFixture([{ added: 1, path: file.path, status: file.status }]),
+    source,
+  };
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      source,
+      walkthrough: true,
+    })),
+    getNarrativeWalkthrough: vi.fn(async () => ({ status: 'ready' as const, walkthrough })),
+    getRepositoryState: vi.fn(async () => ({ ...repositoryState, files: [file], source })),
+  });
+  await using app = await renderReact(<App />);
+  const buttons = () => [
+    ...app.container.querySelectorAll<HTMLButtonElement>('.codiff-viewed-button'),
+  ];
+  const collapsedCount = () => app.container.querySelectorAll('[aria-label="Expand file"]').length;
+  const switchMode = async (label: string) => {
+    const tab = [...app.container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')].find(
+      (button) => button.textContent === label,
+    );
+    expect(tab).toBeDefined();
+    await act(async () => tab!.click());
+  };
+  await waitFor(() => expect(buttons()).toHaveLength(2));
+  expect(app.container.textContent).toContain('Not included in the generated walkthrough.');
+  await act(async () => buttons()[0].click());
+  await switchMode('Tree');
+  await waitFor(() => expect(buttons()).toHaveLength(1));
+  expect(buttons()[0].getAttribute('aria-pressed')).toBe('false');
+  expect(collapsedCount()).toBe(0);
+  await switchMode('Walkthrough');
+  await waitFor(() => expect(buttons()).toHaveLength(2));
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual(['true', 'false']);
+  await act(async () => buttons()[1].click());
+  await switchMode('Tree');
+  await waitFor(() => expect(buttons()).toHaveLength(1));
+  expect(buttons()[0].getAttribute('aria-pressed')).toBe('true');
+  expect(collapsedCount()).toBe(1);
+  const tree = app.container.querySelector('file-tree-container')?.shadowRoot;
+  expect(tree?.querySelector('style[data-codiff-viewed-rows]')?.textContent).toContain(
+    'src/app.ts',
+  );
+  await act(async () => buttons()[0].click());
+  await switchMode('Walkthrough');
+  await waitFor(() => expect(buttons()).toHaveLength(2));
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual([
+    'false',
+    'false',
+  ]);
+  expect(collapsedCount()).toBe(0);
+  await switchMode('Tree');
+  await act(async () => buttons()[0].click());
+  await switchMode('Walkthrough');
+  await waitFor(() => expect(buttons()).toHaveLength(2));
+  expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+  expect(collapsedCount()).toBe(2);
+  expect(window.localStorage.getItem('codiff:viewed:/repo')).toBeNull();
+  await app.rerender(<App key="new-session" />);
+  await waitFor(() => {
+    expect(buttons()).toHaveLength(2);
+    expect(buttons().map((button) => button.getAttribute('aria-pressed'))).toEqual([
+      'false',
+      'false',
+    ]);
+  });
 });

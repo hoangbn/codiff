@@ -5,7 +5,6 @@ const { basename, dirname, join, relative, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
   app,
-  autoUpdater,
   BrowserWindow,
   clipboard,
   dialog,
@@ -57,8 +56,8 @@ const {
   writeConfig,
 } = require('./config.cjs');
 const { readReviewAssistantReply } = require('./review-assist.cjs');
-const { releasePageUrl } = require('./update-check.cjs');
-const { createUpdater, resolveUpdateStrategy } = require('./updater.cjs');
+const { createForkUpdater } = require('./fork-updater.cjs');
+const { showForkUpdateFailure, updateForkFromMenu } = require('./main/fork-update.cjs');
 const { parseReviewUrl, resolveReviewUrl } = require('./review-source.cjs');
 const {
   getPlanWindowTitle,
@@ -80,6 +79,7 @@ const {
 } = require('./main/command-line.cjs');
 const { createSkillInstaller } = require('./main/agent-skill.cjs');
 const { createEditorOpener } = require('./main/editor.cjs');
+const { createDefinitionSearchCoordinator } = require('./definition-search.cjs');
 const { createTerminalHelper } = require('./main/terminal-helper.cjs');
 const {
   readWindowState,
@@ -218,6 +218,7 @@ const { openFileInEditor } = createEditorOpener({
   getEditorCommand: () => config.settings.editorCommand,
   shell,
 });
+const definitionSearchCoordinator = createDefinitionSearchCoordinator();
 
 const openConfigFile = async () => {
   initConfig();
@@ -585,9 +586,9 @@ const buildApplicationMenu = () =>
                 { role: 'about' },
                 {
                   click: () => {
-                    void checkForUpdatesFromMenu();
+                    void updateForkFromMenu(updater, dialog);
                   },
-                  label: 'Check for Updates…',
+                  label: 'Update Fork',
                 },
                 { type: 'separator' },
                 {
@@ -1015,6 +1016,7 @@ const createWindow = (
   });
   window.on('closed', () => {
     openWindows.delete(window);
+    definitionSearchCoordinator.cancel(webContentsId);
     repositoryWatcherCoordinator.detach(webContentsId);
     clearMarkdownDocumentWatchers(webContentsId);
     completedPlanWindows.delete(webContentsId);
@@ -1027,6 +1029,7 @@ const createWindow = (
     windowLaunchOptions.delete(webContentsId);
   });
   window.webContents.on('render-process-gone', () => {
+    definitionSearchCoordinator.cancel(webContentsId);
     writePlanResult(webContentsId, 'canceled');
   });
   window.webContents.on(
@@ -1201,78 +1204,46 @@ const focusOrCreateWindow = (
   return createWindow(repositoryPath, launchOptions, identity);
 };
 
-const INITIAL_UPDATE_CHECK_DELAY_MS = 10 * 1000;
-const UPDATE_CHECK_TIMER_INTERVAL_MS = 4 * 60 * 60 * 1000;
-
-/** @type {ReturnType<typeof createUpdater> | null} */
+/** @type {ReturnType<typeof createForkUpdater> | null} */
 let updater = null;
 
 /** @param {import('../core/types.ts').CodiffUpdateStatus} status */
 const sendUpdateStatusChanged = (status) => {
+  let hasWindow = false;
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      hasWindow = true;
       window.webContents.send('codiff:updateStatusChanged', status);
     }
   }
+  if (!hasWindow && status.phase === 'error') {
+    void showForkUpdateFailure(status.message ?? 'Unknown update error.', dialog);
+  }
 };
-
-const hasSquirrelUpdateExe = () =>
-  process.platform === 'win32' && existsSync(join(dirname(process.execPath), '..', 'Update.exe'));
-
-const detectLinuxPackageFlavor = () =>
-  existsSync('/etc/debian_version')
-    ? /** @type {const} */ ('deb')
-    : existsSync('/etc/redhat-release')
-      ? /** @type {const} */ ('rpm')
-      : null;
 
 const initUpdater = () => {
-  updater = createUpdater({
-    arch: process.arch,
-    autoUpdater,
-    currentVersion: app.getVersion(),
-    downloadDirectory: app.getPath('downloads'),
-    isPackaged: app.isPackaged,
-    linuxFlavor: process.platform === 'linux' ? detectLinuxPackageFlavor() : null,
-    onStatusChange: sendUpdateStatusChanged,
-    openExternal: (url) => shell.openExternal(url),
-    openPath: (path) => shell.openPath(path),
-    platform: process.platform,
-    strategy: resolveUpdateStrategy({
-      hasSquirrelUpdateExe: hasSquirrelUpdateExe(),
-      platform: process.platform,
-    }),
-    updatesEnabled: config.settings.checkForUpdates,
-  });
-};
-
-const runScheduledUpdateCheck = () => {
-  if (updater && config.settings.checkForUpdates) {
-    void updater.checkForUpdates().catch(() => {});
-  }
-};
-
-const checkForUpdatesFromMenu = async () => {
-  if (!updater) {
-    return;
-  }
-
-  try {
-    const status = await updater.checkForUpdates({ force: true });
-    if (status.phase === 'idle') {
-      void dialog.showMessageBox({
-        message: `Codiff ${app.getVersion()} is up to date.`,
-        type: 'info',
+  updater = createForkUpdater({
+    appPath: dirname(dirname(dirname(process.execPath))),
+    confirmUpdate: async () => {
+      const { response } = await dialog.showMessageBox({
+        buttons: ['Cancel', 'Update Fork'],
+        cancelId: 0,
+        defaultId: 0,
+        detail:
+          'Codex will run with unrestricted filesystem and network access, without interactive approvals. It can edit files, run commands, replace this app and restart it. Preservation and rollback instructions are not a security sandbox.',
+        message: 'Allow Codex to update and reinstall this fork?',
+        noLink: true,
+        type: 'warning',
       });
-    }
-  } catch (error) {
-    void dialog.showMessageBox({
-      message: `Checking for updates failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      type: 'error',
-    });
-  }
+      return response === 1;
+    },
+    currentVersion: app.getVersion(),
+    getModel: () => config.settings.openAIModel,
+    isPackaged: app.isPackaged,
+    onStatusChange: sendUpdateStatusChanged,
+    platform: process.platform,
+    updateDirectory: join(app.getPath('userData'), 'fork-updates'),
+  });
 };
 
 const lock =
@@ -1330,8 +1301,6 @@ if (squirrelStartup || !lock) {
     });
 
     initUpdater();
-    setTimeout(runScheduledUpdateCheck, INITIAL_UPDATE_CHECK_DELAY_MS);
-    setInterval(runScheduledUpdateCheck, UPDATE_CHECK_TIMER_INTERVAL_MS);
 
     const launchOptions = getLaunchOptions();
     focusOrCreateWindow(
@@ -1356,7 +1325,6 @@ if (squirrelStartup || !lock) {
           piModel: normalizePiModel(nextConfig.settings.piModel),
         },
       };
-      updater?.setUpdatesEnabled(config.settings.checkForUpdates);
       refreshInstalledAgentFiles();
       nativeTheme.themeSource = config.settings.theme;
       sendConfigChanged();
@@ -1420,12 +1388,9 @@ ipcMain.handle('codiff:dismissUpdate', () =>
   updater ? updater.dismissUpdate() : { currentVersion: app.getVersion(), phase: 'idle' },
 );
 
-ipcMain.handle('codiff:openReleasePage', () => {
-  const version = updater?.getStatus().version;
-  return shell.openExternal(
-    version ? releasePageUrl(version) : 'https://github.com/nkzw-tech/codiff/releases',
-  );
-});
+ipcMain.handle('codiff:openReleasePage', () =>
+  shell.openExternal('https://github.com/hoangbn/codiff'),
+);
 
 ipcMain.handle('codiff:getRepositoryState', async (event, source) => {
   const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
@@ -1860,13 +1825,24 @@ ipcMain.handle('codiff:openRepositoryFolder', (event) =>
   openRepositoryFolder(BrowserWindow.fromWebContents(event.sender) ?? undefined),
 );
 
-ipcMain.handle('codiff:openFile', async (event, filePath) => {
+ipcMain.handle('codiff:findDefinitions', (event, request) =>
+  definitionSearchCoordinator.find(
+    event.sender.id,
+    getWindowRepositoryRoot(event.sender.id),
+    request,
+  ),
+);
+
+ipcMain.handle('codiff:openFile', async (event, filePath, lineNumber) => {
   const repositoryRoot = getWindowRepositoryRoot(event.sender.id);
   const repositoryFilePath = validateRepositoryPath(filePath);
   const absolutePath = resolve(repositoryRoot, repositoryFilePath);
 
   if (existsSync(absolutePath)) {
-    await openFileInEditor(absolutePath, { repoPath: repositoryRoot });
+    await openFileInEditor(absolutePath, {
+      lineNumber: Number.isSafeInteger(lineNumber) && lineNumber > 0 ? lineNumber : undefined,
+      repoPath: repositoryRoot,
+    });
   } else {
     await shell.openPath(repositoryRoot);
   }

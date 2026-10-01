@@ -28,7 +28,7 @@ const loadTrustSystemCertificates = (tlsImpl: typeof tls) => {
   };
 };
 
-test.sequential('merges default, extra, and system certificates once', () => {
+test('merges default, extra, and system certificates once', { concurrent: false }, () => {
   const setDefaultCACertificates = vi.fn();
   const { restore, trustSystemCertificates } = loadTrustSystemCertificates({
     getCACertificates: (source) => {
@@ -62,29 +62,33 @@ test.sequential('merges default, extra, and system certificates once', () => {
   ]);
 });
 
-test.sequential('does not mark certificate trust as initialized after a failed apply', () => {
-  const setDefaultCACertificates = vi
-    .fn()
-    .mockImplementationOnce(() => {
-      throw new Error('keychain busy');
-    })
-    .mockImplementationOnce(() => {});
-  const { restore, trustSystemCertificates } = loadTrustSystemCertificates({
-    getCACertificates: (source) => (source === 'system' ? ['system-ca'] : []),
-    setDefaultCACertificates,
-  });
-  using _cleanup = {
-    [Symbol.dispose]() {
-      restore();
-    },
-  };
+test(
+  'does not mark certificate trust as initialized after a failed apply',
+  { concurrent: false },
+  () => {
+    const setDefaultCACertificates = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('keychain busy');
+      })
+      .mockImplementationOnce(() => {});
+    const { restore, trustSystemCertificates } = loadTrustSystemCertificates({
+      getCACertificates: (source) => (source === 'system' ? ['system-ca'] : []),
+      setDefaultCACertificates,
+    });
+    using _cleanup = {
+      [Symbol.dispose]() {
+        restore();
+      },
+    };
 
-  expect(trustSystemCertificates()).toEqual({ reason: 'keychain busy', status: 'failed' });
-  expect(trustSystemCertificates()).toEqual({ status: 'applied' });
-  expect(setDefaultCACertificates).toHaveBeenCalledTimes(2);
-});
+    expect(trustSystemCertificates()).toEqual({ reason: 'keychain busy', status: 'failed' });
+    expect(trustSystemCertificates()).toEqual({ status: 'applied' });
+    expect(setDefaultCACertificates).toHaveBeenCalledTimes(2);
+  },
+);
 
-test.sequential('reports unavailable and empty system certificate stores', () => {
+test('reports unavailable and empty system certificate stores', { concurrent: false }, () => {
   const unavailable = loadTrustSystemCertificates({});
   using _unavailableCleanup = {
     [Symbol.dispose]() {

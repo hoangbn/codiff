@@ -18,6 +18,7 @@ export const statusLabel: Record<GitFileStatus, string> = {
 };
 
 export const sectionLabel: Record<DiffSection['kind'], string> = {
+  combined: 'Combined',
   commit: 'Commit',
   'pull-request': 'PR',
   staged: 'Staged',
@@ -161,6 +162,20 @@ export const codeViewUnsafeCSS = `
   :host(.codiff-loading-summary-item) [data-file] [data-line],
   :host(.codiff-loading-summary-item) [data-file] [data-column-number] {
     cursor: progress;
+  }
+
+  :host([data-codiff-definition-mode]) [data-codiff-identifier] {
+    cursor: pointer;
+    text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  :host([data-codiff-definition-mode]) [data-codiff-identifier]:hover {
+    text-decoration-color: currentColor;
+    text-decoration-style: solid;
   }
 
   .codiff-search-mark {

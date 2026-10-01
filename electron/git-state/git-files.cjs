@@ -24,8 +24,9 @@ const chunk = (values, size) => {
  * @param {string} repoRoot
  * @param {string} ref
  * @param {ReadonlyArray<string>} paths
+ * @param {NodeJS.ProcessEnv} [env]
  */
-const readTreeEntries = async (repoRoot, ref, paths) => {
+const readTreeEntries = async (repoRoot, ref, paths, env) => {
   /** @type {Map<string, {object: string; type: string}>} */
   const entries = new Map();
   const uniquePaths = [...new Set(paths)];
@@ -35,13 +36,11 @@ const readTreeEntries = async (repoRoot, ref, paths) => {
       continue;
     }
 
-    const raw = await git(repoRoot, [
-      'ls-tree',
-      '-rz',
-      ref,
-      '--',
-      ...pathChunk.map((path) => `:(literal)${path}`),
-    ]);
+    const raw = await git(
+      repoRoot,
+      ['ls-tree', '-rz', ref, '--', ...pathChunk.map((path) => `:(literal)${path}`)],
+      { env },
+    );
     for (const record of raw.split('\0')) {
       if (!record) {
         continue;
@@ -66,8 +65,9 @@ const readTreeEntries = async (repoRoot, ref, paths) => {
 /**
  * @param {string} repoRoot
  * @param {ReadonlyArray<string>} objects
+ * @param {NodeJS.ProcessEnv} [env]
  */
-const readObjectSizes = async (repoRoot, objects) => {
+const readObjectSizes = async (repoRoot, objects, env) => {
   /** @type {Map<string, {size: number; type: string}>} */
   const sizes = new Map();
   const uniqueObjects = [...new Set(objects)];
@@ -80,6 +80,7 @@ const readObjectSizes = async (repoRoot, objects) => {
       repoRoot,
       ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
       `${uniqueObjects.join('\n')}\n`,
+      { env },
     )
   ).toString('utf8');
 
@@ -103,8 +104,9 @@ const readObjectSizes = async (repoRoot, objects) => {
 /**
  * @param {string} repoRoot
  * @param {ReadonlyArray<{object: string; size: number}>} objects
+ * @param {NodeJS.ProcessEnv} [env]
  */
-const readObjectContents = async (repoRoot, objects) => {
+const readObjectContents = async (repoRoot, objects, env) => {
   /** @type {Map<string, Buffer>} */
   const contents = new Map();
   /** @type {Array<{object: string; size: number}>} */
@@ -120,6 +122,7 @@ const readObjectContents = async (repoRoot, objects) => {
       repoRoot,
       ['cat-file', '--batch'],
       `${batch.map((item) => item.object).join('\n')}\n`,
+      { env },
     );
     let offset = 0;
 
@@ -162,8 +165,10 @@ const readObjectContents = async (repoRoot, objects) => {
 /**
  * @param {number} size
  * @param {number} limit
+ * @returns {import('./common.cjs').FileContentResult}
  */
 const createLargeBlobResult = (size, limit) => ({
+  available: true,
   binary: false,
   loadState: size > MANUAL_TEXT_FILE_LIMIT ? 'too-large' : 'deferred',
   summary: createSummary(
@@ -184,6 +189,7 @@ const createLargeBlobResult = (size, limit) => ({
  * @param {boolean} refScoped
  */
 const createEmptyFileContent = (path, ref, refScoped = false) => ({
+  available: false,
   binary: false,
   file: {
     cacheKey: refScoped ? `${ref}:${path}:empty` : `empty:${path}`,
@@ -194,19 +200,22 @@ const createEmptyFileContent = (path, ref, refScoped = false) => ({
 
 /**
  * Read many files from one Git tree with a bounded number of Git processes.
+ * `blobCacheKeys` keys contents by blob id instead of `ref` so unchanged files
+ * keep their cache identity when `ref` is a transient snapshot tree.
  *
  * @param {string} repoRoot
  * @param {string} ref
  * @param {ReadonlyArray<string>} paths
- * @param {{force?: boolean; refScopedEmptyCacheKey?: boolean}} [options]
+ * @param {{blobCacheKeys?: boolean; env?: NodeJS.ProcessEnv; force?: boolean; refScopedEmptyCacheKey?: boolean}} [options]
  * @returns {Promise<Map<string, import('./common.cjs').FileContentResult>>}
  */
 const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
   const limit = options.force ? MANUAL_TEXT_FILE_LIMIT : EAGER_TEXT_FILE_LIMIT;
-  const entries = await readTreeEntries(repoRoot, ref, paths);
+  const entries = await readTreeEntries(repoRoot, ref, paths, options.env);
   const sizes = await readObjectSizes(
     repoRoot,
     [...entries.values()].filter((entry) => entry.type === 'blob').map((entry) => entry.object),
+    options.env,
   );
   const readableObjects = [...sizes.entries()]
     .map(([object, details]) =>
@@ -217,8 +226,8 @@ const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
           }
         : null,
     )
-    .filter(Boolean);
-  const contents = await readObjectContents(repoRoot, readableObjects);
+    .filter((object) => object !== null);
+  const contents = await readObjectContents(repoRoot, readableObjects, options.env);
   /** @type {Map<string, import('./common.cjs').FileContentResult>} */
   const files = new Map();
 
@@ -236,7 +245,7 @@ const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
     }
 
     if (object.size > limit) {
-      files.set(path, createLargeBlobResult(object.size, limit));
+      files.set(path, { ...createLargeBlobResult(object.size, limit), fingerprint: entry.object });
       continue;
     }
 
@@ -244,7 +253,14 @@ const readGitFiles = async (repoRoot, ref, paths, options = {}) => {
     files.set(
       path,
       buffer
-        ? bufferToTextFile(path, buffer, `${ref}:${path}`)
+        ? {
+            available: true,
+            ...bufferToTextFile(
+              path,
+              buffer,
+              `${options.blobCacheKeys ? entry.object : ref}:${path}`,
+            ),
+          }
         : createEmptyFileContent(path, ref, options.refScopedEmptyCacheKey),
     );
   }

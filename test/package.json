@@ -1,0 +1,12 @@
+{
+  "name": "@nkzw/codiff-integration-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vp test"
+  },
+  "devDependencies": {
+    "miniflare": "5.20260910.0-alpha",
+    "vitest": "catalog:"
+  }
+}

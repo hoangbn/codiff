@@ -1,4 +1,5 @@
 import type { DiffSearchMatch } from './app-types.ts';
+import { clearIdentifierNavigationWrappers } from './identifier-navigation.ts';
 
 const searchMarkSelector = 'mark.codiff-search-mark';
 
@@ -86,6 +87,11 @@ export const applySearchHighlights = (
 
   for (const { element, id } of renderedItems) {
     for (const root of getSearchableRoots(element)) {
+      // Inactive navigation spans persist to preserve text selections. Remove
+      // them when searching so queries can still span adjacent identifiers.
+      if (normalizedQuery) {
+        clearIdentifierNavigationWrappers(root);
+      }
       clearSearchHighlights(root);
 
       if (!normalizedQuery) {

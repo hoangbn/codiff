@@ -1,5 +1,8 @@
 # Codiff
 
+Personal fork: the macOS desktop app's **Update Fork** action delegates local
+updates to Codex. See [fork update behavior and requirements](docs/fork-updates.md).
+
 Codiff is a beautiful, minimal, local diff viewer for reviewing Git changes and committing them.
 
 <img width="48%" src="https://github.com/user-attachments/assets/9801587d-5879-461a-b375-9fbfa3c5f25d" />
@@ -10,6 +13,7 @@ Codiff is a beautiful, minimal, local diff viewer for reviewing Git changes and 
 - **Fast Local Reviews:** Review and commit changes in any Git repository.
 - **LLM Walkthroughs:** Run `codiff -w` to generate an optimized commit walkthrough.
 - **Inline Review Comments:** Comment directly on GitHub pull requests and GitLab merge requests, or copy review comments as Markdown for follow-ups.
+- **Lightweight Definition Navigation:** Mod/Ctrl-click an identifier to find likely local definitions without starting a language server.
 
 ## Download
 
@@ -146,17 +150,18 @@ counts; when it is `false`, Codiff hides those changes from the working-tree rev
     "lastRepositoryPath": "",
     "openAIModel": "gpt-5.6-terra",
     "opencodeModel": "opencode-default",
+    "sidebarPosition": "left",
     "showWhitespace": false,
     "theme": "system",
     "walkthroughPrompt": "",
     "wordWrap": false,
   },
   "keymap": {
-    "commandBar": "Mod+Shift+p",
+    "commandBar": "Mod+k",
     "diffSearch": "Mod+f",
     "fileFilter": "Mod+p",
     "nextSearchMatch": "Enter",
-    "openFile": "Mod+k",
+    "openFile": "Mod+Shift+o",
     "prevSearchMatch": "Shift+Enter",
     "closeSearch": "Escape",
     "submitComment": "Mod+Enter",
@@ -167,8 +172,11 @@ counts; when it is `false`, Codiff hides those changes from the working-tree rev
 }
 ```
 
-Set `settings.editorCommand` to customize file opening. Use `{file}` for the selected file and
-`{repo}` for the repository root, for example `"subl \"{repo}\" \"{file}\""`.
+Set `settings.editorCommand` to customize file opening. Use `{file}` for the selected file,
+`{line}` for its line number when available, and `{repo}` for the repository root, for example
+`"subl \"{repo}\" \"{file}\""`.
+Set `settings.sidebarPosition` to `left` or `right` to choose which side of the desktop window shows
+the file sidebar.
 
 Choose `View > Diff > Split` or `View > Diff > Unified`, use Toggle Diff Layout in the command bar,
 or set `settings.diffStyle` to `split` for side-by-side diffs or `unified` for unified diffs.
@@ -180,7 +188,7 @@ Choose `View > Diff > Font Size`, use the code font size commands in the command
 Set `settings.codeFontFamily` manually to an installed CSS font family name, for example
 `"JetBrains Mono"` or `"SF Mono"`. Leave it empty to use Codiff's bundled mono stack.
 Use `Mod` for <kbd>Cmd</kbd> on macOS and <kbd>Ctrl</kbd> on other platforms. Shortcut strings can
-combine `Mod`, `Ctrl`, `Alt`, `Shift`, or `Meta` with a key, for example `Mod+Shift+p` or
+combine `Mod`, `Ctrl`, `Alt`, `Shift`, or `Meta` with a key, for example `Mod+k` or
 `Alt+Enter`.
 
 ## Walkthroughs
@@ -198,11 +206,12 @@ application menu:
   `settings.opencodeModel`.
 - `pi` — the Pi CLI, using its configured default model.
 
-Codex walkthroughs default to GPT-5.6 Terra with low reasoning. The Model menu also offers Sol
-with medium reasoning for deeper analysis and Luna with medium reasoning for faster work. If a
-selected GPT-5.6 model is unavailable, Codiff retries with Terra when applicable and then GPT-5.5,
-persisting the first model that succeeds. Walkthroughs with at least 100 reviewable hunks use
-GPT-5.5 with low reasoning when Terra is the configured default.
+Codex walkthroughs default to GPT-5.6 Terra with low reasoning. The Model menu also offers GPT-5.6
+Sol and Luna with medium reasoning. GPT-6 Astra, Sol, and Luna can be set by model ID in
+`settings.openAIModel`; they use low reasoning by default. If a selected GPT-6 or GPT-5.6 model is
+unavailable, Codiff retries with Terra when applicable and then GPT-5.5, persisting the first model
+that succeeds. Walkthroughs with at least 100 reviewable hunks use GPT-5.5 with low reasoning when
+Terra is the configured default.
 
 Install the backend you want and verify it is available before using `codiff -w`:
 
@@ -214,9 +223,9 @@ pi --version
 ```
 
 Codiff looks for the CLI on `PATH` and the usual install locations. On macOS, it also recognizes
-the CLI embedded in `/Applications/Codex.app` or `~/Applications/Codex.app`. It does not run your
-shell startup files to discover CLIs. If a CLI is installed somewhere else, launch Codiff with an
-explicit path:
+the CLI embedded in `Codex.app` or `ChatGPT.app` under `/Applications` or `~/Applications`. It does
+not run your shell startup files to discover CLIs. If a CLI is installed somewhere else, launch
+Codiff with an explicit path:
 
 ```bash
 CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w
@@ -273,6 +282,10 @@ vpr dev
 ELECTRON_RENDERER_URL=http://127.0.0.1:5173 vpr electron
 ```
 
+To try lightweight Mod/Ctrl-click definition navigation against a deterministic temporary Git
+repository, run `vpr example:definition-navigation`. See the
+[definition navigation example](examples/definition-navigation/README.md) for the expected flow.
+
 Useful checks:
 
 ```bash
@@ -280,6 +293,10 @@ vp check
 vp test
 vp build
 ```
+
+Run `vpr test:integration` to build and test the public sharing service in the local
+Cloudflare Workers runtime. The `test` workspace uses Vitest 4.1 for compatibility
+with `@cloudflare/vitest-plugin`; the main test suite uses Vitest 5.
 
 ## Contributing
 

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, bench, describe } from 'vite-plus/test';
+import { afterAll, beforeAll, describe, test } from 'vite-plus/test';
 import type { RepositoryState, ReviewSource } from '../types.ts';
 
 type GitStateModule = {
@@ -81,14 +81,16 @@ describe('commit diff generation duration', () => {
     }
   });
 
-  bench(`readRepositoryState for ${FILE_COUNT} changed files`, async () => {
-    const state = await readRepositoryState(repo, {
-      ref: commit,
-      type: 'commit',
-    });
+  test(`readRepositoryState for ${FILE_COUNT} changed files`, async ({ bench }) => {
+    await bench('readRepositoryState', async () => {
+      const state = await readRepositoryState(repo, {
+        ref: commit,
+        type: 'commit',
+      });
 
-    if (state.files.length !== FILE_COUNT) {
-      throw new Error(`Expected ${FILE_COUNT} files, received ${state.files.length}.`);
-    }
+      if (state.files.length !== FILE_COUNT) {
+        throw new Error(`Expected ${FILE_COUNT} files, received ${state.files.length}.`);
+      }
+    }).run();
   });
 });
