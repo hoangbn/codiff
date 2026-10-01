@@ -1,5 +1,8 @@
 # Codiff
 
+Personal fork: the macOS desktop app's **Update Fork** action delegates local
+updates to Codex. See [fork update behavior and requirements](docs/fork-updates.md).
+
 Codiff is a beautiful, minimal, local diff viewer for reviewing Git changes and committing them.
 
 <img width="48%" src="https://github.com/user-attachments/assets/9801587d-5879-461a-b375-9fbfa3c5f25d" />

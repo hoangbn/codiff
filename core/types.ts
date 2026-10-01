@@ -802,13 +802,19 @@ export type ReviewPreferences = Pick<
   'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
 >;
 
-export type CodiffUpdatePhase = 'available' | 'error' | 'idle' | 'installerReady' | 'updating';
+export type CodiffUpdatePhase =
+  | 'available'
+  | 'error'
+  | 'idle'
+  | 'installerReady'
+  | 'updated'
+  | 'updating';
 
 export type CodiffUpdateStatus = {
   currentVersion: string;
   message?: string;
   phase: CodiffUpdatePhase;
-  strategy?: 'download' | 'manual' | 'squirrel';
+  strategy?: 'download' | 'fork' | 'manual' | 'squirrel';
   version?: string;
 };
 
