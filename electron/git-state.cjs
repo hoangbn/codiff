@@ -9,6 +9,7 @@ const {
   readBranchWorkingTreeImageContent,
   readBranchWorkingTreeSectionContent,
   readBranchWorkingTreeState,
+  withBranchWorkingTreeContent,
   readCommitImageContent,
   readCommitSectionContent,
   readCommitState,
@@ -161,23 +162,47 @@ const getBranchHistoryRef = (source) =>
     ? `${source.baseRef}..${source.headRef}`
     : `${source.ref}..HEAD`;
 
-/** @param {string} launchPath @param {number} [limit] @param {ReviewSource} [source] @returns {Promise<RepositoryHistory>} */
-const readRepositoryHistory = (launchPath, limit, source) =>
-  source?.type === 'pull-request'
-    ? (isGitLabReviewSource(source) ? listMergeRequestHistory : listPullRequestHistory)(
-        launchPath,
-        source,
-        limit,
-      )
-    : listRepositoryHistory(
-        launchPath,
-        limit,
-        source?.type === 'branch' ||
-          source?.type === 'branch-diff' ||
-          source?.type === 'branch-working-tree'
-          ? getBranchHistoryRef(source)
-          : undefined,
-      );
+/** @param {string} launchPath @param {number} [limit] @param {ReviewSource} [source] @param {import('../core/types.ts').RepositoryHistoryContext | {type: 'capture'}} [context] @returns {Promise<RepositoryHistory>} */
+const readRepositoryHistory = async (launchPath, limit, source, context) => {
+  if (!context && source?.type !== 'pull-request') {
+    return listRepositoryHistory(
+      launchPath,
+      limit,
+      source?.type === 'branch' ||
+        source?.type === 'branch-diff' ||
+        source?.type === 'branch-working-tree'
+        ? getBranchHistoryRef(source)
+        : undefined,
+    );
+  }
+  if (source?.type === 'pull-request') {
+    return (isGitLabReviewSource(source) ? listMergeRequestHistory : listPullRequestHistory)(
+      launchPath,
+      source,
+      limit,
+      context?.type === 'provider' || context?.type === 'capture' ? context : undefined,
+    );
+  }
+  let ref = context?.type === 'local' ? context.ref : undefined;
+  if (ref === undefined) {
+    if (
+      source?.type === 'branch' ||
+      source?.type === 'branch-diff' ||
+      source?.type === 'branch-working-tree'
+    ) {
+      ref = getBranchHistoryRef(source);
+    } else {
+      try {
+        ref = (await git(launchPath, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+      } catch {
+        ref = null;
+      }
+    }
+  }
+  const history = await listRepositoryHistory(launchPath, limit, ref ?? 'HEAD');
+  if (ref === null) history.entries = [];
+  return { ...history, context: { type: 'local', ref } };
+};
 
 /** @param {string} launchPath @param {DiffSectionContentRequest} request */
 const readDiffSectionContent = async (launchPath, request) => {
@@ -240,6 +265,7 @@ const readDiffImageContent = (launchPath, request) =>
             : readWorkingTreeDiffImageContent(launchPath, request);
 
 module.exports = {
+  withBranchWorkingTreeContent,
   PENDING_REVIEW_COMMENT_ERROR,
   collectResolvedReviewCommentIds,
   createPullRequestHistoryFetchRefspecs,

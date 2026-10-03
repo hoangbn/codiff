@@ -198,6 +198,7 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
 
 export type ReviewHistory = {
   entries: ReadonlyArray<HistoryEntry>;
+  error?: string | null;
   hasMore: boolean;
   loading: boolean;
   onLoadMore: () => void;
@@ -1341,6 +1342,7 @@ export function ReviewSurface({
             branchSource={branchSource}
             currentSource={source}
             entries={history.entries}
+            error={history.error}
             hasMore={history.hasMore}
             loading={history.loading}
             onLoadMore={history.onLoadMore}

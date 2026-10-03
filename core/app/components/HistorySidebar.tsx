@@ -32,6 +32,7 @@ export function HistorySidebar({
   branchSource,
   currentSource,
   entries,
+  error,
   hasMore,
   loading,
   onLoadMore,
@@ -44,6 +45,7 @@ export function HistorySidebar({
   branchSource: Extract<ReviewSource, { type: 'branch-diff' }> | null;
   currentSource: ReviewSource;
   entries: ReadonlyArray<HistoryEntry>;
+  error?: string | null;
   hasMore: boolean;
   loading: boolean;
   onLoadMore: () => void;
@@ -259,6 +261,11 @@ export function HistorySidebar({
           </button>
         );
       })}
+      {error ? (
+        <div className="history-loading" role="alert">
+          {error}
+        </div>
+      ) : null}
       {loading ? (
         <div className="history-loading">
           <span>Loading history…</span>

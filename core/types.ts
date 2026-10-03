@@ -234,7 +234,12 @@ export type CommitMetadata = {
   }>;
 };
 
+export type RepositoryHistoryContext =
+  | { ref: string | null; type: 'local' }
+  | { baseRef: string | null; entries: ReadonlyArray<HistoryEntry>; type: 'provider' };
+
 export type RepositoryHistory = {
+  context?: RepositoryHistoryContext;
   entries: ReadonlyArray<HistoryEntry>;
   root: string;
 };

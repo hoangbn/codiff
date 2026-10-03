@@ -102,7 +102,6 @@ import {
   updateStickyHeaderState,
 } from '../../lib/review-comments.ts';
 import { getReviewIdentity, isReviewIdentityViewed } from '../../lib/review-identity.ts';
-import { getSelectedPathFromScroll } from '../../lib/review-scroll.ts';
 import { applySearchHighlights } from '../../lib/search-highlights.ts';
 import { getSourceKey } from '../../lib/source.ts';
 import type {
@@ -2752,23 +2751,26 @@ export function ReviewCodeView({
     source.type === 'branch-diff' || source.type === 'branch-working-tree'
       ? `${source.type}:${source.ref}`
       : sourceKey;
-  const preservedScroll = useRef<{ context: string; path: string | null; top: number } | null>(
-    null,
-  );
+  const preservedScroll = useRef<{
+    context: string;
+    kind: DiffSection['kind'];
+    path: string;
+    target: Extract<CodeViewScrollTarget, { type: 'item' | 'line' }>;
+  } | null>(null);
   useLayoutEffect(() => {
     const viewer = codeViewRef.current?.getInstance();
     const position = preservedScroll.current;
     let frame: number | null = null;
-    if (
-      preserveScrollOnUpdate &&
-      position?.context === scrollContextKey &&
-      position.top > 0 &&
-      files.some((file) => file.path === position.path)
-    ) {
-      // CodeView first reconciles and measures its updated virtual items.
+    const section =
+      position &&
+      files
+        .find((file) => file.path === position.path)
+        ?.sections.find((section) => section.kind === position.kind);
+    if (preserveScrollOnUpdate && position?.context === scrollContextKey && section) {
+      // Reconcile and measure first, then restore the surviving file/line anchor.
       frame = window.requestAnimationFrame(() => {
         frame = window.requestAnimationFrame(() => {
-          viewer?.scrollTo({ behavior: 'instant', position: position.top, type: 'position' });
+          viewer?.scrollTo({ ...position.target, id: getItemId(section) });
         });
       });
     }
@@ -2776,13 +2778,56 @@ export function ReviewCodeView({
       if (frame !== null) {
         window.cancelAnimationFrame(frame);
       }
-      preservedScroll.current = viewer
-        ? {
-            context: scrollContextKey,
-            path: getSelectedPathFromScroll(viewer, files, showWhitespace),
-            top: viewer.getScrollTop(),
+      preservedScroll.current = null;
+      if (!preserveScrollOnUpdate || !viewer || viewer.getScrollTop() <= 0) {
+        return;
+      }
+      const top = viewer.getScrollTop();
+      let anchor: { path: string; section: DiffSection; top: number } | undefined;
+      for (const file of files) {
+        for (const section of file.sections) {
+          const itemTop = viewer.getTopForItem(getItemId(section));
+          if (
+            itemTop != null &&
+            itemTop <= top + DEFAULT_PADDING &&
+            (!anchor || itemTop > anchor.top)
+          ) {
+            anchor = { path: file.path, section, top: itemTop };
           }
-        : null;
+        }
+      }
+      if (!anchor) {
+        return;
+      }
+      const rendered = viewer
+        .getRenderedItems()
+        .find((item) => item.id === getItemId(anchor.section));
+      const line = rendered?.instance.getNumericScrollAnchor(
+        top + codeViewItemMetrics.diffHeaderHeight - anchor.top,
+      );
+      preservedScroll.current = {
+        context: scrollContextKey,
+        kind: anchor.section.kind,
+        path: anchor.path,
+        target: line
+          ? {
+              align: 'start',
+              behavior: 'instant',
+              id: getItemId(anchor.section),
+              lineNumber: line.lineNumber,
+              side: line.side,
+              type: 'line',
+              // Line targets subtract the sticky header; item targets do not.
+              offset: anchor.top + line.top - top - codeViewItemMetrics.diffHeaderHeight,
+            }
+          : {
+              align: 'start',
+              behavior: 'instant',
+              id: getItemId(anchor.section),
+              offset: anchor.top - top,
+              type: 'item',
+            },
+      };
     };
   }, [files, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
   const [definitionLookupSourceKey, setDefinitionLookupSourceKey] = useState(sourceKey);

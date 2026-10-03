@@ -581,26 +581,48 @@ const readRepositoryCommits = async (repoRoot, mergeRequest, ref, limit) => {
   return commits;
 };
 
-/** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @param {number} [limit] */
-const listMergeRequestHistory = async (launchPath, source, limit = 200) => {
+/** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @param {number} [limit] @param {Extract<import('../../core/types.ts').RepositoryHistoryContext, {type: 'provider'}> | {type: 'capture'}} [context] */
+const listMergeRequestHistory = async (launchPath, source, limit = 200, context) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const mergeRequest = parseGitLabMergeRequestUrl(source.url);
-  const metadata = await readMergeRequestMetadata(repoRoot, mergeRequest);
-  const commits = parseGlabJsonPages(
-    await glabApi(repoRoot, mergeRequest, [
-      '--paginate',
-      `${mergeRequestEndpoint(mergeRequest, '/commits')}?per_page=100`,
-    ]),
-  );
-  const baseCommits = metadata.target_branch
-    ? await readRepositoryCommits(repoRoot, mergeRequest, metadata.target_branch, limit)
-    : [];
-  return {
-    entries: [
-      ...commits
+  let pinned = context?.type === 'provider' ? context : undefined;
+  let baseCommits;
+  if (!pinned) {
+    const metadata = await readMergeRequestMetadata(repoRoot, mergeRequest);
+    const commits = parseGlabJsonPages(
+      await glabApi(repoRoot, mergeRequest, [
+        '--paginate',
+        `${mergeRequestEndpoint(mergeRequest, '/commits')}?per_page=100`,
+      ]),
+    );
+    if (context)
+      assertProviderSnapshot(
+        source,
+        {
+          baseSha: metadata.diff_refs?.base_sha,
+          headSha: metadata.diff_refs?.head_sha || metadata.sha,
+        },
+        'GitLab',
+      );
+    baseCommits = metadata.target_branch
+      ? await readRepositoryCommits(repoRoot, mergeRequest, metadata.target_branch, limit)
+      : [];
+    pinned = {
+      type: 'provider',
+      baseRef: baseCommits[0]?.id ?? null,
+      entries: commits
         .map((commit) => normalizeGitLabCommit(commit, 'pull-request'))
         .filter(Boolean)
         .reverse(),
+    };
+  }
+  baseCommits ??= pinned.baseRef
+    ? await readRepositoryCommits(repoRoot, mergeRequest, pinned.baseRef, limit)
+    : [];
+  return {
+    ...(context ? { context: pinned } : {}),
+    entries: [
+      ...pinned.entries,
       ...baseCommits.map((commit) => normalizeGitLabCommit(commit, 'base')).filter(Boolean),
     ],
     root: repoRoot,
