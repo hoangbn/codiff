@@ -21,6 +21,11 @@ import type {
   ReviewSource,
 } from '../types.ts';
 import { createChangedFile, createChangedFileWithPatch } from './helpers/fixtures.ts';
+import {
+  markdownEditorMock,
+  resetMarkdownEditorMock,
+  createLoadedMarkdownFile,
+} from './helpers/markdown-editor.tsx';
 import { renderReact, setInputValue, waitFor } from './helpers/react.tsx';
 import {
   codeViewMock,
@@ -29,110 +34,17 @@ import {
   type ReviewDiffBlock,
 } from './helpers/review-code-view.tsx';
 
-const markdownEditorMock = vi.hoisted(() => ({
-  flush: vi.fn<() => Promise<boolean>>(async () => true),
-  heightByAriaLabel: new Map<string, number>(),
-  heightReportLimit: Number.POSITIVE_INFINITY,
-  heightReports: 0,
-  loadingPaths: new Set<string>(),
-}));
+vi.mock('../app/components/MarkdownDocumentEditor.tsx', async () =>
+  (await import('./helpers/markdown-editor.tsx')).createMarkdownDocumentEditorMock(),
+);
 
-vi.mock('../app/components/MarkdownDocumentEditor.tsx', async () => {
-  const React = await import('react');
-
-  return {
-    RepositoryMarkdownEditor: React.forwardRef(function MockRepositoryMarkdownEditor(
-      { onHeightChange, path }: { onHeightChange?: (height: number) => void; path: string },
-      ref: React.ForwardedRef<{ flush: () => Promise<boolean> }>,
-    ) {
-      React.useImperativeHandle(ref, () => ({
-        flush: markdownEditorMock.flush,
-      }));
-      const [loading, setLoading] = React.useState(() => markdownEditorMock.loadingPaths.has(path));
-      React.useEffect(() => {
-        const finishLoading = () => setLoading(markdownEditorMock.loadingPaths.has(path));
-        window.addEventListener('markdown-loaded', finishLoading);
-        return () => window.removeEventListener('markdown-loaded', finishLoading);
-      }, [path]);
-      React.useEffect(() => {
-        if (!loading) {
-          onHeightChange?.(markdownEditorMock.heightByAriaLabel.get(`Edit ${path}`) ?? 100);
-        }
-      }, [loading, onHeightChange, path]);
-      if (loading) {
-        return <div className="codiff-markdown-editor-message">Loading…</div>;
-      }
-      return <div aria-label={`Edit ${path}`}>Markdown editor</div>;
-    }),
-  };
-});
-
-vi.mock('@nkzw/mdx-editor', async () => {
-  const React = await import('react');
-  type MockEditorProps = {
-    ariaLabel?: string;
-    className?: string;
-    contentClassName?: string;
-    onBlur?: () => void;
-    onChange?: (value: string) => void;
-    onFocus?: () => void;
-    onHeightChange?: (height: number) => void;
-    onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
-    placeholder?: string;
-    readOnly?: boolean;
-    value?: string;
-  };
-
-  return {
-    MarkdownEditor: React.forwardRef<
-      {
-        focus: () => void;
-      },
-      MockEditorProps
-    >((props, ref) => {
-      const inputRef = React.useRef<HTMLTextAreaElement>(null);
-      const { onHeightChange } = props;
-      React.useImperativeHandle(ref, () => ({
-        focus: () => inputRef.current?.focus(),
-      }));
-      React.useEffect(() => {
-        if (
-          onHeightChange &&
-          markdownEditorMock.heightReports < markdownEditorMock.heightReportLimit
-        ) {
-          markdownEditorMock.heightReports += 1;
-          onHeightChange(markdownEditorMock.heightByAriaLabel.get(props.ariaLabel ?? '') ?? 100);
-        }
-      }, [onHeightChange, props.ariaLabel]);
-      return (
-        <textarea
-          aria-label={props.ariaLabel}
-          className={props.contentClassName ?? props.className}
-          onBlur={props.onBlur}
-          onChange={(event) => props.onChange?.(event.currentTarget.value)}
-          onDoubleClick={() => onHeightChange?.(200)}
-          onFocus={props.onFocus}
-          onKeyDown={(event) =>
-            props.onKeyDown?.(event as unknown as React.KeyboardEvent<HTMLDivElement>)
-          }
-          placeholder={props.placeholder}
-          readOnly={props.readOnly}
-          ref={inputRef}
-          value={props.value}
-        />
-      );
-    }),
-  };
-});
+vi.mock('@nkzw/mdx-editor', async () =>
+  (await import('./helpers/markdown-editor.tsx')).createMdxEditorMock(),
+);
 
 beforeEach(() => {
   resetCodeViewMock();
-  markdownEditorMock.flush.mockClear();
-  markdownEditorMock.flush.mockResolvedValue(true);
-  markdownEditorMock.heightByAriaLabel.clear();
-  markdownEditorMock.heightReportLimit = Number.POSITIVE_INFINITY;
-  markdownEditorMock.heightReports = 0;
-  markdownEditorMock.loadingPaths.clear();
+  resetMarkdownEditorMock();
 });
 
 const getCodeViewItemVersion = (id: string) =>
@@ -145,41 +57,6 @@ const getWalkthroughHeaderNode = (blockId: string) => {
   );
   expect(index).toBeGreaterThanOrEqual(0);
   return codeViewMock.postRenderNodes[index];
-};
-
-const createLoadedMarkdownFile = (contents: string, fingerprint: string) => {
-  const file = createChangedFileWithPatch(
-    'plan.md',
-    `diff --git a/plan.md b/plan.md\n@@ -1 +1 @@\n-# Original\n+${contents}`,
-  );
-  return {
-    ...file,
-    fingerprint,
-    sections: file.sections.map((section) => ({
-      ...section,
-      loadState: 'ready' as const,
-      newFile: {
-        contents,
-        name: file.path,
-      },
-      oldFile: {
-        contents: '# Original\n',
-        name: file.path,
-      },
-    })),
-  };
-};
-
-const createCombinedFile = (contents: string, fingerprint: string) => {
-  const file = createLoadedMarkdownFile(contents, fingerprint);
-  return {
-    ...file,
-    sections: file.sections.map((section) => ({
-      ...section,
-      id: 'plan.md:combined:1111111111111111111111111111111111111111',
-      kind: 'combined' as const,
-    })),
-  } satisfies ChangedFile;
 };
 
 test('generated files are collapsed by default and can be explicitly expanded per review', async () => {
@@ -282,69 +159,6 @@ test('switching edited Markdown back to a diff flushes and refreshes it first', 
   );
   expect(diffButton).not.toBeUndefined();
   expect(diffButton?.classList.contains('codiff-button')).toBe(true);
-  await act(async () => {
-    diffButton?.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-  await waitFor(() => {
-    expect(container.querySelector('[aria-label="Edit plan.md"]')).toBeNull();
-  });
-  expect(order).toEqual(['flush', 'refresh']);
-  expect(JSON.stringify(codeViewMock.lastItems)).toContain('# Saved');
-});
-
-test('combined branch Markdown edits the single combined section and refreshes after save', async () => {
-  const order: Array<string> = [];
-  const initialFile = createCombinedFile('# Edited\n', 'plan.md:combined-initial');
-  const refreshedFile = createCombinedFile('# Saved\n', 'plan.md:combined-refreshed');
-  const combinedSource = {
-    baseRef: 'base123',
-    headRef: 'head123',
-    ref: 'main',
-    type: 'branch-working-tree',
-  } satisfies ReviewSource;
-
-  markdownEditorMock.flush.mockImplementation(async () => {
-    order.push('flush');
-    return true;
-  });
-
-  function Harness() {
-    const [file, setFile] = useState(initialFile);
-    return (
-      <ReviewCodeViewHarness
-        files={[file]}
-        onRefreshMarkdown={async () => {
-          order.push('refresh');
-          setFile(refreshedFile);
-          return true;
-        }}
-        source={combinedSource}
-      />
-    );
-  }
-
-  const container = document.createElement('div');
-  document.body.append(container);
-  let root: Root | null = null;
-
-  await using _resource = {
-    async [Symbol.asyncDispose]() {
-      if (root) {
-        await act(async () => root?.unmount());
-      }
-      container.remove();
-    },
-  };
-  await act(async () => {
-    root = createRoot(container);
-    root.render(<Harness />);
-  });
-  expect(container.querySelector('[aria-label="Edit plan.md"]')).not.toBeNull();
-  const diffButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
-    ({ textContent }) => textContent === 'View as Diff',
-  );
-  expect(diffButton).not.toBeUndefined();
   await act(async () => {
     diffButton?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));

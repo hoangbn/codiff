@@ -592,20 +592,24 @@ const readPullRequestCommits = async (repoRoot, pullRequest) => {
 const readRepositoryCommits = async (repoRoot, pullRequest, sha, limit) => {
   /** @type {Array<GitHubCommit>} */
   const commits = [];
+  const perPage = Math.min(limit, 100);
   for (let page = 1; commits.length < limit; page += 1) {
     const pageCommits = JSON.parse(
       await ghApi(repoRoot, [
         `repos/${pullRequest.owner}/${pullRequest.repo}/commits?sha=${encodeURIComponent(
           sha,
-        )}&per_page=${Math.min(limit - commits.length, 100)}&page=${page}`,
+        )}&per_page=${perPage}&page=${page}`,
       ]),
     );
     if (!Array.isArray(pageCommits) || pageCommits.length === 0) {
       break;
     }
     commits.push(...pageCommits);
+    if (pageCommits.length < perPage) {
+      break;
+    }
   }
-  return commits;
+  return commits.slice(0, limit);
 };
 
 /** @param {GitHubCommit} commit @param {'base' | 'pull-request'} [scope] */
@@ -631,22 +635,39 @@ const normalizeGitHubCommit = (commit, scope) => {
 /** @param {GitHubCommit} commit */
 const normalizeGitHubPullRequestCommit = (commit) => normalizeGitHubCommit(commit, 'pull-request');
 
-/** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @param {number} [limit] */
-const listPullRequestHistory = async (launchPath, source, limit = 200) => {
+/** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @param {number} [limit] @param {Extract<import('../../core/types.ts').RepositoryHistoryContext, {type: 'provider'}> | {type: 'capture'}} [context] */
+const listPullRequestHistory = async (launchPath, source, limit = 200, context) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const pullRequest = parseGitHubPullRequestUrl(source.url);
-  const [metadata, commits] = await Promise.all([
-    readPullRequestMetadata(repoRoot, pullRequest),
-    readPullRequestCommits(repoRoot, pullRequest),
-  ]);
-  const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
-  await fetchPullRequestHistoryRefs(repoRoot, remote, pullRequest, metadata);
-  const baseCommits = metadata.base?.sha
-    ? await readRepositoryCommits(repoRoot, pullRequest, metadata.base.sha, limit)
+  let pinned = context?.type === 'provider' ? context : undefined;
+  if (!pinned) {
+    const metadata = await readPullRequestMetadata(repoRoot, pullRequest);
+    const snapshot = { baseSha: metadata.base?.sha, headSha: metadata.head?.sha };
+    if (context) assertProviderSnapshot(source, snapshot, 'GitHub');
+    const commits = await readPullRequestCommits(repoRoot, pullRequest);
+    if (context) {
+      const current = await readPullRequestMetadata(repoRoot, pullRequest);
+      assertProviderSnapshot(
+        snapshot,
+        { baseSha: current.base?.sha, headSha: current.head?.sha },
+        'GitHub',
+      );
+    }
+    const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
+    await fetchPullRequestHistoryRefs(repoRoot, remote, pullRequest, metadata);
+    pinned = {
+      type: 'provider',
+      baseRef: metadata.base?.sha ?? null,
+      entries: commits.map(normalizeGitHubPullRequestCommit).filter(Boolean).reverse(),
+    };
+  }
+  const baseCommits = pinned.baseRef
+    ? await readRepositoryCommits(repoRoot, pullRequest, pinned.baseRef, limit)
     : [];
   return {
+    ...(context ? { context: pinned } : {}),
     entries: [
-      ...commits.map(normalizeGitHubPullRequestCommit).filter(Boolean).reverse(),
+      ...pinned.entries,
       ...baseCommits.map((commit) => normalizeGitHubCommit(commit, 'base')).filter(Boolean),
     ],
     root: repoRoot,

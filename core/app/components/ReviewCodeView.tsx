@@ -2608,6 +2608,7 @@ export function ReviewCodeView({
   onUpdateSourceDescription,
   onUpdateSourceTitle,
   onUploadSourceDescriptionAsset,
+  preserveScrollOnUpdate = false,
   reviewIdentityByPath,
   scrollTarget,
   searchQuery,
@@ -2670,6 +2671,7 @@ export function ReviewCodeView({
   onUpdateSourceDescription?: (body: string) => Promise<void> | void;
   onUpdateSourceTitle?: (title: string) => Promise<void> | void;
   onUploadSourceDescriptionAsset?: (file: File) => Promise<string> | string;
+  preserveScrollOnUpdate?: boolean;
   reviewIdentityByPath?: ReadonlyMap<string, ReviewIdentity>;
   scrollTarget: ReviewScrollTarget | null;
   searchQuery: string;
@@ -2745,6 +2747,89 @@ export function ReviewCodeView({
   const definitionLookupRequestRef = useRef(0);
   const definitionModifierActiveRef = useRef(false);
   const sourceKey = getSourceKey(source);
+  const scrollContextKey =
+    source.type === 'branch-diff' || source.type === 'branch-working-tree'
+      ? `${source.type}:${source.ref}`
+      : sourceKey;
+  const preservedScroll = useRef<{
+    context: string;
+    kind: DiffSection['kind'];
+    path: string;
+    target: Extract<CodeViewScrollTarget, { type: 'item' | 'line' }>;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const viewer = codeViewRef.current?.getInstance();
+    const position = preservedScroll.current;
+    let frame: number | null = null;
+    const section =
+      position &&
+      files
+        .find((file) => file.path === position.path)
+        ?.sections.find((section) => section.kind === position.kind);
+    if (preserveScrollOnUpdate && position?.context === scrollContextKey && section) {
+      // Reconcile and measure first, then restore the surviving file/line anchor.
+      frame = window.requestAnimationFrame(() => {
+        frame = window.requestAnimationFrame(() => {
+          viewer?.scrollTo({ ...position.target, id: getItemId(section) });
+        });
+      });
+    }
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      preservedScroll.current = null;
+      if (!preserveScrollOnUpdate || !viewer || viewer.getScrollTop() <= 0) {
+        return;
+      }
+      const top = viewer.getScrollTop();
+      let anchor: { path: string; section: DiffSection; top: number } | undefined;
+      for (const file of files) {
+        for (const section of file.sections) {
+          const itemTop = viewer.getTopForItem(getItemId(section));
+          if (
+            itemTop != null &&
+            itemTop <= top + DEFAULT_PADDING &&
+            (!anchor || itemTop > anchor.top)
+          ) {
+            anchor = { path: file.path, section, top: itemTop };
+          }
+        }
+      }
+      if (!anchor) {
+        return;
+      }
+      const rendered = viewer
+        .getRenderedItems()
+        .find((item) => item.id === getItemId(anchor.section));
+      const line = rendered?.instance.getNumericScrollAnchor(
+        top + codeViewItemMetrics.diffHeaderHeight - anchor.top,
+      );
+      preservedScroll.current = {
+        context: scrollContextKey,
+        kind: anchor.section.kind,
+        path: anchor.path,
+        target: line
+          ? {
+              align: 'start',
+              behavior: 'instant',
+              id: getItemId(anchor.section),
+              lineNumber: line.lineNumber,
+              side: line.side,
+              type: 'line',
+              // Line targets subtract the sticky header; item targets do not.
+              offset: anchor.top + line.top - top - codeViewItemMetrics.diffHeaderHeight,
+            }
+          : {
+              align: 'start',
+              behavior: 'instant',
+              id: getItemId(anchor.section),
+              offset: anchor.top - top,
+              type: 'item',
+            },
+      };
+    };
+  }, [files, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
   const [definitionLookupSourceKey, setDefinitionLookupSourceKey] = useState(sourceKey);
   if (definitionLookupSourceKey !== sourceKey) {
     setDefinitionLookupSourceKey(sourceKey);

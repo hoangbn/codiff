@@ -292,10 +292,10 @@ const readWorkingTreeState = async (launchPath, options = {}) => {
   };
 };
 
-/** @param {string} repoRoot @param {string} path @returns {Promise<StatusItem>} */
-const getStatusItemForPath = async (repoRoot, path) => {
+/** @param {string} repoRoot @param {string} path @param {NodeJS.ProcessEnv} [env] @returns {Promise<StatusItem>} */
+const getStatusItemForPath = async (repoRoot, path, env) => {
   const trackedStatus = parseStatus(
-    await git(repoRoot, ['status', '--porcelain=v1', '-z', '-uno']),
+    await git(repoRoot, ['status', '--porcelain=v1', '-z', '-uno'], { env }),
   );
   const trackedItem = trackedStatus.find((item) => item.path === path);
   if (trackedItem) {
@@ -313,16 +313,17 @@ const getStatusItemForPath = async (repoRoot, path) => {
   };
 };
 
-/** @param {string} launchPath @param {DiffSectionContentRequest} request */
-const readDiffSectionContent = async (launchPath, request) => {
-  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+/** @param {string} launchPath @param {DiffSectionContentRequest} request @param {NodeJS.ProcessEnv} [env] */
+const readDiffSectionContent = async (launchPath, request, env) => {
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'], { env })).trim();
   const path = validateRepositoryPath(request.path);
   if (request.kind === 'commit' || request.source?.type === 'commit') {
     throw new Error('Lazy loading commit diffs is not supported.');
   }
 
-  const item = await getStatusItemForPath(repoRoot, path);
+  const item = await getStatusItemForPath(repoRoot, path, env);
   return createSection(repoRoot, item, /** @type {WorkingTreeSectionKind} */ (request.kind), {
+    env,
     force: request.force,
     showWhitespace: request.showWhitespace,
   });
@@ -331,28 +332,29 @@ const readDiffSectionContent = async (launchPath, request) => {
 /**
  * @param {string} launchPath
  * @param {DiffImageContentRequest} request
+ * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<DiffImageContentResult>}
  */
-const readDiffImageContent = async (launchPath, request) => {
+const readDiffImageContent = async (launchPath, request, env) => {
   try {
-    const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+    const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'], { env })).trim();
     const path = validateRepositoryPath(request.path);
     if (request.kind === 'commit' || request.source?.type === 'commit') {
       throw new Error('Commit image diffs are loaded through the commit reader.');
     }
 
-    const item = await getStatusItemForPath(repoRoot, path);
+    const item = await getStatusItemForPath(repoRoot, path, env);
     const oldPath = item.oldPath || item.path;
     const [oldImage, newImage] =
       request.kind === 'staged'
         ? await Promise.all([
-            readGitImageFile(repoRoot, 'HEAD', oldPath),
-            readIndexImageFile(repoRoot, item.path),
+            readGitImageFile(repoRoot, 'HEAD', oldPath, env),
+            readIndexImageFile(repoRoot, item.path, undefined, env),
           ])
         : await Promise.all([
             item.untracked
               ? undefined
-              : readIndexImageFile(repoRoot, item.path, item.conflictStage),
+              : readIndexImageFile(repoRoot, item.path, item.conflictStage, env),
             readWorkingTreeImageFile(repoRoot, item.path),
           ]);
 

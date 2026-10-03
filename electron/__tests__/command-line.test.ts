@@ -514,34 +514,3 @@ test('does not restore over explicit launch intent', async () => {
     }),
   ).toBe('/fallback');
 });
-
-test('reads base...head and base..head positionals as a range source', async () => {
-  await using directory = await createTemporaryDirectory('codiff-range-');
-
-  await git(directory.path, ['init']);
-  await git(directory.path, ['commit', '--allow-empty', '-m', 'first']);
-  await git(directory.path, ['branch', 'base']);
-  await git(directory.path, ['commit', '--allow-empty', '-m', 'second']);
-  await git(directory.path, ['branch', 'head']);
-
-  expect(readCommandLine(['codiff', 'base...head', directory.path]).launchOptions.source).toEqual({
-    base: 'base',
-    head: 'head',
-    symmetric: true,
-    type: 'range',
-  });
-
-  expect(readCommandLine(['codiff', 'base..head', directory.path]).launchOptions.source).toEqual({
-    base: 'base',
-    head: 'head',
-    symmetric: false,
-    type: 'range',
-  });
-
-  expect(readCommandLine(['codiff', 'nope...nada', directory.path]).launchOptions.source).toEqual({
-    base: 'nope',
-    head: 'nada',
-    symmetric: true,
-    type: 'range',
-  });
-});

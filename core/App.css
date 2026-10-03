@@ -874,7 +874,14 @@ a.review-top-bar-source:focus-visible {
   flex: none;
   font: 600 12px/1.35 var(--font-mono);
   gap: 4px;
+  max-width: min(320px, 25vw);
   white-space: nowrap;
+}
+
+.review-top-bar-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .review-top-bar-context {
@@ -1679,6 +1686,16 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-web-review {
   flex-direction: column;
+}
+
+.codiff-web-review[aria-busy='true'] > :not(.review-source-loading) {
+  visibility: hidden;
+}
+
+.codiff-web-review > .review-source-loading {
+  inset: 0;
+  position: absolute;
+  z-index: 1;
 }
 
 .window-drag-region {

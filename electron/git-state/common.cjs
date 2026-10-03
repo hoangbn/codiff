@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
  *   unstaged: boolean;
  *   untracked: boolean;
  * }} StatusItem
- * @typedef {{force?: boolean; patch?: {binary: boolean; patch: string}; patchOnly?: boolean; showWhitespace?: boolean}} ReadFileOptions
+ * @typedef {{env?: NodeJS.ProcessEnv; force?: boolean; patch?: {binary: boolean; patch: string}; patchOnly?: boolean; showWhitespace?: boolean}} ReadFileOptions
  * @typedef {{number: number; owner: string; repo: string; url: string}} PullRequestReference
  * @typedef {{owner: string; repo: string}} GitHubRemote
  * @typedef {{filename: string; patch?: string; previous_filename?: string; status: string}} GitHubPullRequestFile
@@ -401,9 +401,9 @@ const readImageSpec = async (repoRoot, spec, path, env) => {
 const readGitImageFile = (repoRoot, ref, path, env) =>
   readImageSpec(repoRoot, `${ref}:${path}`, path, env);
 
-/** @param {string} repoRoot @param {string} path @param {1 | 2 | 3} [stage] */
-const readIndexImageFile = (repoRoot, path, stage) =>
-  readImageSpec(repoRoot, stage ? `:${stage}:${path}` : `:${path}`, path);
+/** @param {string} repoRoot @param {string} path @param {1 | 2 | 3} [stage] @param {NodeJS.ProcessEnv} [env] */
+const readIndexImageFile = (repoRoot, path, stage, env) =>
+  readImageSpec(repoRoot, stage ? `:${stage}:${path}` : `:${path}`, path, env);
 
 /** @param {string} repoRoot @param {string} path */
 const readWorkingTreeImageFile = async (repoRoot, path) => {
@@ -436,7 +436,7 @@ const readGitFile = async (repoRoot, ref, path, options = {}) => {
   const spec = `${ref}:${path}`;
 
   try {
-    const size = await getBlobSize(repoRoot, spec);
+    const size = await getBlobSize(repoRoot, spec, options.env);
     if (size != null && size > limit) {
       return {
         binary: false,
@@ -454,7 +454,7 @@ const readGitFile = async (repoRoot, ref, path, options = {}) => {
       };
     }
 
-    const buffer = await gitBuffer(repoRoot, ['show', spec]);
+    const buffer = await gitBuffer(repoRoot, ['show', spec], { env: options.env });
     return bufferToTextFile(path, buffer, `${ref}:${path}`);
   } catch {
     return {
@@ -480,7 +480,7 @@ const readIndexFile = async (repoRoot, path, options = {}, stage) => {
   const spec = stage ? `:${stage}:${path}` : `:${path}`;
 
   try {
-    const size = await getBlobSize(repoRoot, spec);
+    const size = await getBlobSize(repoRoot, spec, options.env);
     if (size != null && size > limit) {
       return {
         binary: false,
@@ -498,7 +498,7 @@ const readIndexFile = async (repoRoot, path, options = {}, stage) => {
       };
     }
 
-    const buffer = await gitBuffer(repoRoot, ['show', spec]);
+    const buffer = await gitBuffer(repoRoot, ['show', spec], { env: options.env });
     return bufferToTextFile(path, buffer, `index:${path}`);
   } catch {
     return {
@@ -635,7 +635,7 @@ const createPatchForNewFile = (path, contents) => {
 const getWhitespaceDiffArgs = (options = {}) =>
   options.showWhitespace === false ? ['--ignore-all-space'] : [];
 
-/** @param {string} repoRoot @param {StatusItem} item @param {WorkingTreeSectionKind} kind @param {{showWhitespace?: boolean}} [options] */
+/** @param {string} repoRoot @param {StatusItem} item @param {WorkingTreeSectionKind} kind @param {{env?: NodeJS.ProcessEnv; showWhitespace?: boolean}} [options] */
 const getPatch = async (repoRoot, item, kind, options = {}) => {
   const whitespaceArgs = getWhitespaceDiffArgs(options);
   if (item.status === 'conflicted' && !item.conflictStage) {
@@ -668,7 +668,7 @@ const getPatch = async (repoRoot, item, kind, options = {}) => {
             item.path,
           ]
         : ['diff', '--patch', '--no-ext-diff', ...whitespaceArgs, '--', item.path];
-  const rawPatch = await git(repoRoot, args);
+  const rawPatch = await git(repoRoot, args, { env: options.env });
   const diffStart = item.status === 'conflicted' ? rawPatch.indexOf('diff --git ') : -1;
   const patch =
     item.status !== 'conflicted' ? rawPatch : diffStart === -1 ? '' : rawPatch.slice(diffStart);
@@ -835,7 +835,7 @@ const createSection = async (repoRoot, item, kind, options = {}) => {
     };
   }
 
-  const patch = await getPatch(repoRoot, item, kind, options);
+  const patch = options.patch ?? (await getPatch(repoRoot, item, kind, options));
 
   return {
     binary: patch.binary || contents.binary,

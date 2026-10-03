@@ -1,11 +1,13 @@
 import { ArrowSquareOutIcon as ArrowSquareOut } from '@phosphor-icons/react/ArrowSquareOut';
 import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
+import { ClockCounterClockwiseIcon as ClockCounterClockwise } from '@phosphor-icons/react/ClockCounterClockwise';
 import { PathIcon as Path } from '@phosphor-icons/react/Path';
 import { TreeStructureIcon as TreeStructure } from '@phosphor-icons/react/TreeStructure';
 import { Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from './app/components/Button.tsx';
 import { ReviewFileTree } from './app/components/FileTree.tsx';
+import { HistorySidebar } from './app/components/HistorySidebar.tsx';
 import {
   MergeRequestCommentsView,
   SidebarGeneralCommentList,
@@ -17,6 +19,8 @@ import {
   PullRequestMergeControls,
   PullRequestMergeStatusBadge,
   PullRequestReviewButtons,
+  RepositoryChangeBanner,
+  ReviewSourceLoading,
 } from './app/components/Panels.tsx';
 import {
   PullRequestSourceDescription,
@@ -70,9 +74,12 @@ import {
   readSidebarWidth,
   writeSidebarWidth,
 } from './lib/sidebar-width.ts';
-import { getSourceLabel, getSourceKey } from './lib/source.ts';
+import { getSourceLabel, getSourceKey, getEmptySourceTitle } from './lib/source.ts';
 import type { ReviewContentLoader } from './review-content-loader.ts';
 import type {
+  CommitMetadata,
+  HistoryEntry,
+  ReviewSource,
   GitIdentity,
   PullRequestMergeOptions,
   PullRequestGeneralComment,
@@ -155,7 +162,7 @@ const writeStoredSidebarCollapsed = (sidebarCollapsed: boolean) => {
 };
 
 export type ReviewWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
-export type ReviewMode = 'comments' | 'tree' | 'walkthrough';
+export type ReviewMode = 'comments' | 'history' | 'tree' | 'walkthrough';
 
 export type { ReviewContentLoader } from './review-content-loader.ts';
 
@@ -189,11 +196,26 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
   status: 'unavailable',
 });
 
+export type ReviewHistory = {
+  entries: ReadonlyArray<HistoryEntry>;
+  error?: string | null;
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+  onSelectSource: (source: ReviewSource) => void;
+  source: ReviewSource;
+  startingSelected?: boolean;
+  startingSource: ReviewSource;
+};
+
 export type ReviewSurfaceProps = {
   commenting?: ReviewCommenting;
+  commitMetadata?: CommitMetadata | null;
+  comparisonLoading?: boolean;
   contentLoader?: ReviewContentLoader;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
+  history?: ReviewHistory;
   initialMode?: ReviewMode;
   interactive?: {
     onCancelAutoMerge?: () => Promise<void> | void;
@@ -225,6 +247,7 @@ export type ReviewSurfaceProps = {
   onDeleteShare?: () => Promise<void> | void;
   onModeChange?: (mode: ReviewMode) => void;
   providerLabel?: string;
+  refresh?: { changesDetected: boolean; onRefresh: () => void };
   repositoryUrl?: string;
   settingsBar?: ReactNode;
   sidebarPosition?: 'left' | 'right';
@@ -242,14 +265,18 @@ const shouldCollapseSidebarInitially = () =>
 
 export function ReviewSurface({
   commenting,
+  commitMetadata = null,
+  comparisonLoading = false,
   contentLoader,
   externalUrl,
   gitIdentity = null,
+  history,
   initialMode,
   interactive,
   onDeleteShare,
   onModeChange,
   providerLabel = 'provider',
+  refresh,
   repositoryUrl,
   settingsBar,
   sidebarPosition = 'left',
@@ -301,6 +328,7 @@ export function ReviewSurface({
   );
   const keymap = useMemo(() => createDefaultConfig().keymap, []);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<ReviewMode>(
     () => initialMode ?? (interactive ? 'tree' : 'walkthrough'),
   );
@@ -448,10 +476,11 @@ export function ReviewSurface({
   const handledHashTargetRef = useRef<string | null>(null);
 
   const focusPath = snapshot.files[0]?.path;
+  const activeFileSearchQuery = sidebarMode === 'history' ? '' : fileSearchQuery;
   const visibleFiles = useMemo(() => {
     const files = sortFiles(reviewFiles).filter(
       (file) =>
-        fuzzyMatches(file.path, fileSearchQuery) &&
+        fuzzyMatches(file.path, activeFileSearchQuery) &&
         fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
     );
     const focusIndex = files.findIndex((file) => file.path === focusPath);
@@ -459,7 +488,7 @@ export function ReviewSurface({
     return focusIndex <= 0 || !focusFile
       ? files
       : [focusFile, ...files.slice(0, focusIndex), ...files.slice(focusIndex + 1)];
-  }, [fileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
+  }, [activeFileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
   const totalLineCount = useMemo(
     () =>
       getTotalDiffLineCount(
@@ -956,7 +985,7 @@ export function ReviewSurface({
     codeQualityFindings: snapshot.codeQualityFindings,
     collapsed,
     comments: reviewComments,
-    commitMetadata: null,
+    commitMetadata,
     diffLineHeight,
     diffStyle: snapshot.preferences.diffStyle,
     disableWorkerPool: true,
@@ -1118,7 +1147,30 @@ export function ReviewSurface({
   const requestWalkthrough = () => {
     startWalkthroughGeneration();
   };
+  const historySource = history?.source;
+  const branchSource =
+    historySource?.type === 'branch-diff'
+      ? historySource
+      : historySource?.type === 'branch-working-tree' &&
+          historySource.baseRef &&
+          historySource.headRef
+        ? {
+            ...historySource,
+            baseRef: historySource.baseRef,
+            headRef: historySource.headRef,
+            type: 'branch-diff' as const,
+          }
+        : null;
   const reviewModes = [
+    ...(history
+      ? [
+          {
+            icon: <ClockCounterClockwise aria-hidden size={14} weight="bold" />,
+            label: 'History',
+            value: 'history' as const,
+          },
+        ]
+      : []),
     {
       icon: <Path aria-hidden size={14} weight="bold" />,
       label: 'Walkthrough',
@@ -1207,11 +1259,13 @@ export function ReviewSurface({
                   target="_blank"
                   title={`Open ${sourceLabel} in ${providerLabel}`}
                 >
-                  <span>{sourceLabel}</span>
+                  <span className="review-top-bar-source-label">{sourceLabel}</span>
                   <ArrowSquareOut aria-hidden size={14} weight="bold" />
                 </a>
               ) : (
-                <span className="review-top-bar-source">{sourceLabel}</span>
+                <span className="review-top-bar-source" title={sourceLabel}>
+                  <span className="review-top-bar-source-label">{sourceLabel}</span>
+                </span>
               )
             ) : null}
           </>
@@ -1258,19 +1312,47 @@ export function ReviewSurface({
         sidebarPosition={sidebarPosition}
         toggleTitle={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`}
       />
+      {refresh ? (
+        <RepositoryChangeBanner
+          onRefresh={refresh.onRefresh}
+          visible={
+            refresh.changesDetected &&
+            (source.type === 'working-tree' || source.type === 'branch-working-tree')
+          }
+        />
+      ) : null}
       <aside className="squircle sidebar">
         <div className="sidebar-search-row">
           <input
-            aria-label="Filter changed files"
+            aria-label={sidebarMode === 'history' ? 'Filter history' : 'Filter changed files'}
             className="sidebar-search"
-            onChange={(event) => setFileSearchQuery(event.currentTarget.value)}
-            placeholder="Filter files"
+            onChange={(event) =>
+              (sidebarMode === 'history' ? setHistorySearchQuery : setFileSearchQuery)(
+                event.currentTarget.value,
+              )
+            }
+            placeholder={sidebarMode === 'history' ? 'Filter history' : 'Filter files'}
             spellCheck={false}
             type="search"
-            value={fileSearchQuery}
+            value={sidebarMode === 'history' ? historySearchQuery : fileSearchQuery}
           />
         </div>
-        {sidebarMode === 'tree' ? (
+        {sidebarMode === 'history' && history ? (
+          <HistorySidebar
+            branchSource={branchSource}
+            currentSource={source}
+            entries={history.entries}
+            error={history.error}
+            hasMore={history.hasMore}
+            loading={history.loading}
+            onLoadMore={history.onLoadMore}
+            onSelectSource={history.onSelectSource}
+            pullRequestSource={historySource?.type === 'pull-request' ? historySource : null}
+            searchQuery={historySearchQuery}
+            startingSelected={history.startingSelected ?? false}
+            startingSource={history.startingSource}
+          />
+        ) : sidebarMode === 'tree' ? (
           <ReviewFileTree
             files={visibleFiles}
             onActivatePath={activateTreePath}
@@ -1321,7 +1403,8 @@ export function ReviewSurface({
         ) : null}
       </aside>
       <div aria-hidden className="sidebar-resizer" onPointerDown={resizeSidebar} />
-      <main className="review codiff-web-review">
+      <main aria-busy={comparisonLoading} className="review codiff-web-review">
+        {comparisonLoading ? <ReviewSourceLoading /> : null}
         {sidebarMode === 'comments' ? (
           <MergeRequestCommentsView
             canComment={canComment}
@@ -1348,12 +1431,16 @@ export function ReviewSurface({
             submitting={generalCommentSubmitting}
             threads={generalCommentThreads}
           />
-        ) : sidebarMode === 'tree' ? (
-          visibleFiles.length === 0 ? (
+        ) : sidebarMode === 'tree' || sidebarMode === 'history' ? (
+          visibleFiles.length === 0 && !commitMetadata ? (
             <div className="empty-state">
               <div className="empty-panel squircle">
-                <strong>No matching files</strong>
-                <span>{fileSearchQuery}</span>
+                <strong>
+                  {activeFileSearchQuery || !history
+                    ? 'No matching files'
+                    : getEmptySourceTitle(source)}
+                </strong>
+                <span>{activeFileSearchQuery}</span>
               </div>
             </div>
           ) : (
@@ -1363,6 +1450,7 @@ export function ReviewSurface({
               files={visibleFiles}
               forceExpandedPaths={emptyPaths}
               onSelectPathFromScroll={updateSelectedPathFromScroll}
+              preserveScrollOnUpdate={Boolean(history)}
               scrollTarget={treeScrollTarget}
               selectedPath={visibleSelectedPath}
               sourceDescriptionActions={sourceDescriptionActions}

@@ -114,7 +114,7 @@ const readRepositoryWatcherPathState = async (repoRoot, path, exact) => {
  */
 const readRepositoryWatcherSnapshot = async (repoRoot, exactPaths = [], knownDirtyPaths = []) => {
   const knownDirtyPathSet = new Set(knownDirtyPaths);
-  const statusArgs = ['status', '--porcelain=v2', '--branch', '-z', '-uall'];
+  const statusArgs = ['--no-optional-locks', 'status', '--porcelain=v2', '--branch', '-z', '-uall'];
   // Git status hashes modified tracked files. Known dirty paths are monitored
   // through metadata instead, while this command discovers all new changes.
   if (knownDirtyPathSet.size > 0) {
