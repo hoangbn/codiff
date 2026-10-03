@@ -225,7 +225,9 @@ export function HistorySidebar({
           );
         }
 
-        const selected = row.key === currentSourceKey;
+        const selected =
+          row.key === currentSourceKey ||
+          Boolean(startingSelected && startingSource && row.key === getSourceKey(startingSource));
         const hasMetadata = Boolean(row.author && row.committedAt);
         return (
           <button

@@ -475,10 +475,11 @@ export function ReviewSurface({
   const handledHashTargetRef = useRef<string | null>(null);
 
   const focusPath = snapshot.files[0]?.path;
+  const activeFileSearchQuery = sidebarMode === 'history' ? '' : fileSearchQuery;
   const visibleFiles = useMemo(() => {
     const files = sortFiles(reviewFiles).filter(
       (file) =>
-        fuzzyMatches(file.path, fileSearchQuery) &&
+        fuzzyMatches(file.path, activeFileSearchQuery) &&
         fileHasVisibleDiff(file, snapshot.preferences.showWhitespace),
     );
     const focusIndex = files.findIndex((file) => file.path === focusPath);
@@ -486,7 +487,7 @@ export function ReviewSurface({
     return focusIndex <= 0 || !focusFile
       ? files
       : [focusFile, ...files.slice(0, focusIndex), ...files.slice(focusIndex + 1)];
-  }, [fileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
+  }, [activeFileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
   const totalLineCount = useMemo(
     () =>
       getTotalDiffLineCount(
@@ -1432,9 +1433,11 @@ export function ReviewSurface({
             <div className="empty-state">
               <div className="empty-panel squircle">
                 <strong>
-                  {fileSearchQuery ? 'No matching files' : getEmptySourceTitle(source)}
+                  {activeFileSearchQuery || !history
+                    ? 'No matching files'
+                    : getEmptySourceTitle(source)}
                 </strong>
-                <span>{fileSearchQuery}</span>
+                <span>{activeFileSearchQuery}</span>
               </div>
             </div>
           ) : (
