@@ -1,3 +1,4 @@
+export { canRenderImagePreview } from './lib/diff.ts';
 export { defaultReviewPreferences } from './defaults.ts';
 export {
   parsePlanShareManifest,
@@ -7,6 +8,10 @@ export {
 } from './share.ts';
 export type {
   ChangedFile,
+  CommitMetadata,
+  HistoryEntry,
+  RepositoryHistory,
+  RepositoryHistoryContext,
   CodiffFeatureFlags,
   CodiffPreferences,
   DiffImageContentRequest,

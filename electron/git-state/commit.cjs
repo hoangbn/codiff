@@ -681,58 +681,64 @@ const readBranchWorkingTreeState = async (launchPath, input, options = {}) => {
 };
 
 /**
- * Lazy reads rebuild the snapshot so they compare the resolved base with the
- * current final contents, never a committed-only or index-only version.
+ * Keep one private final-working-tree snapshot alive for a host's content capture.
+ * Desktop lazy reads continue to create a fresh snapshot for each request.
+ * @template T
  * @param {string} launchPath
- * @param {DiffSectionContentRequest} request
+ * @param {BranchWorkingTreeSource} source
+ * @param {(reader: {readSection: (request: DiffSectionContentRequest) => Promise<import('../../core/types.ts').DiffSection>; readImage: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>}) => Promise<T>} run
  */
-const readBranchWorkingTreeSectionContent = async (launchPath, request) => {
-  const { oldRef, repoRoot } = await resolveBranchWorkingTreeComparison(
-    launchPath,
-    /** @type {BranchWorkingTreeSource} */ (request.source),
-  );
-
-  return withBranchSnapshot(repoRoot, async (snapshot) =>
-    readComparisonSectionContent(
-      repoRoot,
-      snapshot.tree,
-      oldRef,
-      await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef),
-      request.path,
-      'branch',
-      {
-        blobCacheKeys: true,
-        env: snapshot.env,
-        force: request.force,
-        literalPaths: true,
-        section: { kind: 'combined', ref: getCombinedSectionRef(oldRef) },
-        showWhitespace: request.showWhitespace,
-      },
-    ),
-  );
+const withBranchWorkingTreeContent = async (launchPath, source, run) => {
+  const { oldRef, repoRoot } = await resolveBranchWorkingTreeComparison(launchPath, source);
+  return withBranchSnapshot(repoRoot, async (snapshot) => {
+    const status = await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef);
+    return run({
+      readSection: (request) =>
+        readComparisonSectionContent(
+          repoRoot,
+          snapshot.tree,
+          oldRef,
+          status,
+          request.path,
+          'branch',
+          {
+            blobCacheKeys: true,
+            env: snapshot.env,
+            force: request.force,
+            literalPaths: true,
+            section: { kind: 'combined', ref: getCombinedSectionRef(oldRef) },
+            showWhitespace: request.showWhitespace,
+          },
+        ),
+      readImage: (request) =>
+        readComparisonImageContent(
+          repoRoot,
+          snapshot.tree,
+          oldRef,
+          status,
+          request.path,
+          'branch',
+          snapshot.env,
+        ),
+    });
+  });
 };
 
-/**
- * @param {string} launchPath
- * @param {DiffImageContentRequest} request
- * @returns {Promise<DiffImageContentResult>}
- */
+/** @param {string} launchPath @param {DiffSectionContentRequest} request */
+const readBranchWorkingTreeSectionContent = (launchPath, request) =>
+  withBranchWorkingTreeContent(
+    launchPath,
+    /** @type {BranchWorkingTreeSource} */ (request.source),
+    (reader) => reader.readSection(request),
+  );
+
+/** @param {string} launchPath @param {DiffImageContentRequest} request @returns {Promise<DiffImageContentResult>} */
 const readBranchWorkingTreeImageContent = async (launchPath, request) => {
   try {
-    const { oldRef, repoRoot } = await resolveBranchWorkingTreeComparison(
+    return await withBranchWorkingTreeContent(
       launchPath,
       /** @type {BranchWorkingTreeSource} */ (request.source),
-    );
-    return await withBranchSnapshot(repoRoot, async (snapshot) =>
-      readComparisonImageContent(
-        repoRoot,
-        snapshot.tree,
-        oldRef,
-        await readBranchWorkingTreeStatus(repoRoot, snapshot, oldRef),
-        request.path,
-        'branch',
-        snapshot.env,
-      ),
+      (reader) => reader.readImage(request),
     );
   } catch (error) {
     return {
@@ -793,6 +799,7 @@ const listRepositoryHistory = async (launchPath, limit = 200, ref = 'HEAD') => {
 };
 
 module.exports = {
+  withBranchWorkingTreeContent,
   listRepositoryHistory,
   readBranchImageContent,
   readBranchSectionContent,
