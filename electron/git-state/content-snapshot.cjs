@@ -30,6 +30,22 @@ const captureRepositoryContent = async (state, directory) => {
     delete cleanEnvironment[key];
   }
   const objectFormat = (await git(state.root, ['rev-parse', '--show-object-format'])).trim();
+  // Freeze rendering settings, without importing source repository locations,
+  // hooks, credentials or includes into the private repository.
+  const configuration = (await git(state.root, ['config', '--null', '--list']))
+    .split('\0')
+    .filter(Boolean)
+    .map((record) => {
+      const newline = record.indexOf('\n');
+      return newline === -1
+        ? [record, 'true']
+        : [record.slice(0, newline), record.slice(newline + 1)];
+    })
+    .filter(([key]) =>
+      /^(core\.(filemode|symlinks|autocrlf|eol|safecrlf|ignorecase|quotepath|precomposeunicode)$|diff\.|filter\.)/i.test(
+        key,
+      ),
+    );
   await git(
     directory,
     [
@@ -50,7 +66,13 @@ const captureRepositoryContent = async (state, directory) => {
     GIT_DIR: gitDirectory,
     GIT_WORK_TREE: worktree,
     GIT_INDEX_FILE: join(gitDirectory, 'index'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: join(directory, 'empty-config'),
   };
+  await fs.writeFile(env.GIT_CONFIG_GLOBAL, '');
+  for (const [key, value] of configuration) {
+    await git(worktree, ['config', '--local', '--replace-all', key, value], { env });
+  }
   const files = state.files.filter(
     (file) =>
       file.sections.some((section) => section.summary?.canLoad !== false) ||
@@ -65,6 +87,27 @@ const captureRepositoryContent = async (state, directory) => {
       throw new Error('Git metadata cannot be captured as review content.');
     }
   }
+  // Resolve hierarchy, macros, index fallback and info/global attributes now.
+  // Exact path rules in info/attributes take precedence over mutable inputs.
+  const attributes = paths.length
+    ? (await git(state.root, ['check-attr', '-z', '--all', '--', ...paths])).split('\0')
+    : [];
+  const rules = [];
+  for (let index = 0; index + 2 < attributes.length; index += 3) {
+    const [path, attribute, value] = attributes.slice(index, index + 3);
+    const pattern = JSON.stringify(`/${path.replace(/[\\*?\[\]]/g, '\\$&')}`);
+    const setting =
+      value === 'set'
+        ? attribute
+        : value === 'unset'
+          ? `-${attribute}`
+          : value === 'unspecified'
+            ? `!${attribute}`
+            : `${attribute}=${value}`;
+    rules.push(`${pattern} ${setting}\n`);
+  }
+  await fs.mkdir(join(gitDirectory, 'info'), { recursive: true });
+  await fs.writeFile(join(gitDirectory, 'info', 'attributes'), rules.join(''));
   /** @type {Map<string, string>} */
   const imported = new Map();
   const oversized = new Set();
