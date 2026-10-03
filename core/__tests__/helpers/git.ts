@@ -1,6 +1,20 @@
 import { rm } from 'node:fs/promises';
 import { createTemporaryEnvironment } from './resources.ts';
 
+const repositoryEnvironmentKeys = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_DIR',
+  'GIT_GRAFT_FILE',
+  'GIT_IMPLICIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_QUARANTINE_PATH',
+  'GIT_SHALLOW_FILE',
+  'GIT_WORK_TREE',
+] as const;
+
 const gitHookIsolation = {
   GIT_CONFIG_COUNT: '4',
   GIT_CONFIG_KEY_3: 'core.hooksPath',
@@ -9,21 +23,27 @@ const gitHookIsolation = {
 
 export const getGitTestEnvironment = (
   overrides: Readonly<Record<string, string | undefined>> = {},
-): NodeJS.ProcessEnv => ({
-  ...process.env,
-  GIT_AUTHOR_EMAIL: 'codiff@example.com',
-  GIT_AUTHOR_NAME: 'Codiff Test',
-  GIT_COMMITTER_EMAIL: 'codiff@example.com',
-  GIT_COMMITTER_NAME: 'Codiff Test',
-  GIT_CONFIG_COUNT: '3',
-  GIT_CONFIG_KEY_0: 'core.excludesfile',
-  GIT_CONFIG_KEY_1: 'commit.gpgSign',
-  GIT_CONFIG_KEY_2: 'tag.gpgSign',
-  GIT_CONFIG_VALUE_0: '/dev/null',
-  GIT_CONFIG_VALUE_1: 'false',
-  GIT_CONFIG_VALUE_2: 'false',
-  ...overrides,
-});
+): NodeJS.ProcessEnv => {
+  const inherited = { ...process.env };
+  for (const key of repositoryEnvironmentKeys) {
+    delete inherited[key];
+  }
+  return {
+    ...inherited,
+    GIT_AUTHOR_EMAIL: 'codiff@example.com',
+    GIT_AUTHOR_NAME: 'Codiff Test',
+    GIT_COMMITTER_EMAIL: 'codiff@example.com',
+    GIT_COMMITTER_NAME: 'Codiff Test',
+    GIT_CONFIG_COUNT: '3',
+    GIT_CONFIG_KEY_0: 'core.excludesfile',
+    GIT_CONFIG_KEY_1: 'commit.gpgSign',
+    GIT_CONFIG_KEY_2: 'tag.gpgSign',
+    GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_VALUE_1: 'false',
+    GIT_CONFIG_VALUE_2: 'false',
+    ...overrides,
+  };
+};
 
 export const getGitTestEnvironmentForSubprocess = (
   overrides: Readonly<Record<string, string | undefined>> = {},
@@ -49,7 +69,7 @@ export const withGitTestEnvironment = async <T>(
       key.startsWith('GIT_CONFIG_'),
   );
   const scopedEnvironment: Record<string, string | undefined> = {};
-  for (const key of keys) {
+  for (const key of [...keys, ...repositoryEnvironmentKeys]) {
     scopedEnvironment[key] = environment[key];
   }
   await using _environment = createTemporaryEnvironment(scopedEnvironment);

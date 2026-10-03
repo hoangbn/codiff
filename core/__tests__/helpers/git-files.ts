@@ -26,6 +26,7 @@ type GitFilesModule = {
 import { execFile, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
+import { getGitTestEnvironment } from './git.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +35,7 @@ const require = createRequire(import.meta.url);
 export const git = async (repository: string, args: ReadonlyArray<string>) => {
   const { stdout } = await execFileAsync('git', ['-C', repository, ...args], {
     encoding: 'utf8',
+    env: getGitTestEnvironment(),
     maxBuffer: 1024 * 1024 * 64,
   });
   return stdout;
@@ -42,6 +44,7 @@ export const git = async (repository: string, args: ReadonlyArray<string>) => {
 export const fastImport = async (repository: string, input: Buffer) => {
   await new Promise<void>((resolve, reject) => {
     const child = spawn('git', ['-C', repository, 'fast-import', '--quiet'], {
+      env: getGitTestEnvironment(),
       stdio: ['pipe', 'ignore', 'pipe'],
     });
     let stderr = '';

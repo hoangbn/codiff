@@ -605,6 +605,9 @@ const readRepositoryCommits = async (repoRoot, pullRequest, sha, limit) => {
       break;
     }
     commits.push(...pageCommits);
+    if (pageCommits.length < perPage) {
+      break;
+    }
   }
   return commits.slice(0, limit);
 };

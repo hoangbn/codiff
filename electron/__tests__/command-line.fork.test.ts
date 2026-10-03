@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
-import { getGitTestEnvironment } from '../../core/__tests__/helpers/git.ts';
+import { git } from '../../core/__tests__/helpers/cli-repository.ts';
 import { createTemporaryDirectory } from '../../core/__tests__/helpers/resources.ts';
 
 const require = createRequire(import.meta.url);
@@ -52,15 +50,6 @@ const readCommandLine = (commandLine: ReadonlyArray<string>) => ({
   pullRequestNumber: null,
   repositoryPath: getCommandLineRepositoryPath(commandLine),
 });
-
-const execFileAsync = promisify(execFile);
-
-const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync('git', ['-C', repo, ...args], {
-    encoding: 'utf8',
-    env: getGitTestEnvironment(),
-  });
-};
 
 test('reads base...head and base..head positionals as a range source', async () => {
   await using directory = await createTemporaryDirectory('codiff-range-');

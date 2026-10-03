@@ -96,7 +96,7 @@ test('History marks a resolved starting row and does not apply the hidden Tree f
             author: 'Ada',
             committedAt: 1_780_000_000_000,
             parents: [],
-            ref: 'main',
+            ref: 'a'.repeat(40),
             subject: 'Starting change',
           },
         ],
@@ -132,8 +132,46 @@ test('History marks a resolved starting row and does not apply the hidden Tree f
       .click(),
   );
   expect(
-    view.container.querySelector('[title="Starting change"]')?.classList.contains('selected'),
+    view.container.querySelector('[title="Requested comparison"]')?.classList.contains('selected'),
   ).toBe(true);
+  expect(view.container.querySelectorAll('.history-entry.selected')).toHaveLength(1);
   expect(view.container.textContent).toContain('report.md');
   expect(view.container.textContent).not.toContain('No matching files');
+});
+
+test('History requests an underfilled page but filters only loaded entries', async () => {
+  const onLoadMore = vi.fn();
+  const history = {
+    entries: [],
+    hasMore: true,
+    loading: false,
+    onLoadMore,
+    onSelectSource: () => {},
+    source: { type: 'working-tree' } as const,
+    startingSource: { type: 'working-tree' } as const,
+  };
+  await using view = await renderReact(
+    <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
+  );
+  expect(onLoadMore).toHaveBeenCalledTimes(1);
+  const input = view.container.querySelector<HTMLInputElement>('[aria-label="Filter history"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+      input,
+      'missing',
+    );
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  onLoadMore.mockClear();
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...history, loading: true }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  await view.rerender(
+    <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
+  );
+  expect(onLoadMore).not.toHaveBeenCalled();
 });

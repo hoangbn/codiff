@@ -1,6 +1,7 @@
 // @ts-check
 
 const { git, gitOrEmpty, parseStatus, validateRepositoryPath } = require('./git-state/common.cjs');
+const { captureRepositoryContent } = require('./git-state/content-snapshot.cjs');
 const {
   listRepositoryHistory,
   readBranchImageContent,
@@ -190,7 +191,19 @@ const readRepositoryHistory = async (launchPath, limit, source, context) => {
       source?.type === 'branch-diff' ||
       source?.type === 'branch-working-tree'
     ) {
-      ref = getBranchHistoryRef(source);
+      const [base, head] = await Promise.all([
+        git(launchPath, [
+          'rev-parse',
+          '--verify',
+          `${(source.type !== 'branch' && source.baseRef) || source.ref}^{commit}`,
+        ]),
+        git(launchPath, [
+          'rev-parse',
+          '--verify',
+          `${(source.type !== 'branch' && source.headRef) || 'HEAD'}^{commit}`,
+        ]),
+      ]);
+      ref = `${base.trim()}..${head.trim()}`;
     } else {
       try {
         ref = (await git(launchPath, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
@@ -265,6 +278,7 @@ const readDiffImageContent = (launchPath, request) =>
             : readWorkingTreeDiffImageContent(launchPath, request);
 
 module.exports = {
+  captureRepositoryContent,
   withBranchWorkingTreeContent,
   PENDING_REVIEW_COMMENT_ERROR,
   collectResolvedReviewCommentIds,

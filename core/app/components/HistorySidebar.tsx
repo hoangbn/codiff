@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { PullRequestSource } from '../../lib/app-types.ts';
 import { getShortRef, getSourceKey } from '../../lib/source.ts';
 import type { HistoryEntry, ReviewSource } from '../../types.ts';
@@ -203,6 +203,10 @@ export function HistorySidebar({
     }
   }, [hasMore, loading, normalizedQuery, onLoadMore]);
 
+  useEffect(() => {
+    maybeLoadMore();
+  }, [maybeLoadMore, rows]);
+
   return (
     <div className="history-list" onScroll={maybeLoadMore} ref={listRef}>
       {startingSource &&
@@ -228,8 +232,9 @@ export function HistorySidebar({
         }
 
         const selected =
-          row.key === currentSourceKey ||
-          Boolean(startingSelected && startingSource && row.key === getSourceKey(startingSource));
+          startingSelected && startingSource
+            ? row.key === getSourceKey(startingSource)
+            : row.key === currentSourceKey;
         const hasMetadata = Boolean(row.author && row.committedAt);
         return (
           <button

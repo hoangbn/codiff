@@ -158,3 +158,23 @@ test('GitLab fresh capture pins the target tip before reading later base pages',
     );
   });
 });
+
+test.each(['branch', 'branch-working-tree'] as const)(
+  '%s captured History remains pinned when symbolic endpoints advance',
+  async (type) => {
+    await withRepo(async (repo) => {
+      await writeRepoFile(repo, 'file.txt', 'base\n');
+      await commitAll(repo, 'base');
+      await git(repo, ['branch', 'target']);
+      await writeRepoFile(repo, 'file.txt', 'review\n');
+      await commitAll(repo, 'review');
+      const source = { ref: 'target', type };
+      const captured = await listRepositoryHistory(repo, 1, source, { type: 'capture' });
+      await writeRepoFile(repo, 'file.txt', 'advanced\n');
+      await commitAll(repo, 'advanced');
+      await git(repo, ['branch', '--force', 'target', 'HEAD']);
+      const page = await listRepositoryHistory(repo, 30, source, captured.context!);
+      expect(page.entries.map((entry) => entry.subject)).toEqual(['review']);
+    });
+  },
+);

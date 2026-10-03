@@ -29,6 +29,7 @@ export const createCliReferenceRepository = async () => {
   await git(refRepositoryPath, ['branch', 'feature']);
   const { stdout } = await execFileAsync('git', ['-C', refRepositoryPath, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
+    env: getGitTestEnvironment(),
   });
   const refRepositoryShortHash = stdout.trim().slice(0, 8);
   await git(refRepositoryPath, ['branch', refRepositoryShortHash]);
