@@ -139,7 +139,7 @@ test('History marks a resolved starting row and does not apply the hidden Tree f
   expect(view.container.textContent).not.toContain('No matching files');
 });
 
-test('History requests an underfilled page but filters only loaded entries', async () => {
+test('History fills short pages, stops failed automatic retries, and filters loaded entries', async () => {
   const onLoadMore = vi.fn();
   const history = {
     entries: [],
@@ -154,6 +154,58 @@ test('History requests an underfilled page but filters only loaded entries', asy
     <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
   );
   expect(onLoadMore).toHaveBeenCalledTimes(1);
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...history, loading: true }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...history, error: 'History failed' }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  expect(view.container.querySelector('[role="alert"]')?.textContent).toBe('History failed');
+  expect(onLoadMore).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    view.container.querySelector('.history-list')!.dispatchEvent(new Event('scroll'));
+  });
+  expect(onLoadMore).toHaveBeenCalledTimes(2);
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...history, loading: true }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  // Hosts may display the error outside History rather than pass history.error.
+  await view.rerender(
+    <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
+  );
+  expect(onLoadMore).toHaveBeenCalledTimes(2);
+  const nextHistory = {
+    ...history,
+    entries: [
+      {
+        author: 'Ada',
+        committedAt: 1_780_000_000_000,
+        parents: [],
+        ref: 'b'.repeat(40),
+        subject: 'Older change',
+      },
+    ],
+  };
+  await view.rerender(
+    <ReviewSurface
+      history={nextHistory}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  expect(onLoadMore).toHaveBeenCalledTimes(3);
   const input = view.container.querySelector<HTMLInputElement>('[aria-label="Filter history"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
@@ -165,13 +217,17 @@ test('History requests an underfilled page but filters only loaded entries', asy
   onLoadMore.mockClear();
   await view.rerender(
     <ReviewSurface
-      history={{ ...history, loading: true }}
+      history={{ ...nextHistory, loading: true }}
       initialMode="history"
       snapshot={createReviewSnapshot([])}
     />,
   );
   await view.rerender(
-    <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
+    <ReviewSurface
+      history={nextHistory}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
   );
   expect(onLoadMore).not.toHaveBeenCalled();
 });
