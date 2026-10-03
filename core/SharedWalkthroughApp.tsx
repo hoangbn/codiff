@@ -1449,6 +1449,7 @@ export function ReviewSurface({
               files={visibleFiles}
               forceExpandedPaths={emptyPaths}
               onSelectPathFromScroll={updateSelectedPathFromScroll}
+              preserveScrollOnUpdate={Boolean(history)}
               scrollTarget={treeScrollTarget}
               selectedPath={visibleSelectedPath}
               sourceDescriptionActions={sourceDescriptionActions}

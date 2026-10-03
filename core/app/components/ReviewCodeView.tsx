@@ -102,6 +102,7 @@ import {
   updateStickyHeaderState,
 } from '../../lib/review-comments.ts';
 import { getReviewIdentity, isReviewIdentityViewed } from '../../lib/review-identity.ts';
+import { getSelectedPathFromScroll } from '../../lib/review-scroll.ts';
 import { applySearchHighlights } from '../../lib/search-highlights.ts';
 import { getSourceKey } from '../../lib/source.ts';
 import type {
@@ -475,8 +476,7 @@ function MarkdownPreview({
   sectionId: string;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [readyContents, setReadyContents] = useState<string | null>(null);
-  const ready = readyContents === contents;
+  const [ready, setReady] = useState(false);
   const measure = useCallback(
     (reportedHeight?: number) => {
       const content = contentRef.current;
@@ -494,13 +494,13 @@ function MarkdownPreview({
       if (height == null || height <= 0) {
         return;
       }
-      setReadyContents(contents);
+      setReady(true);
       if (heightCache.get(cacheKey) !== height) {
         heightCache.set(cacheKey, height);
         onLayoutReady(sectionId);
       }
     },
-    [cacheKey, contents, heightCache, onLayoutReady, sectionId],
+    [cacheKey, heightCache, onLayoutReady, sectionId],
   );
 
   useLayoutEffect(() => {
@@ -529,7 +529,6 @@ function MarkdownPreview({
           <ReadOnlyMarkdown
             ariaLabel={`Preview ${path}`}
             className="codiff-markdown-preview-editor"
-            key={contents}
             onHeightChange={measure}
             value={contents}
           />
@@ -2610,6 +2609,7 @@ export function ReviewCodeView({
   onUpdateSourceDescription,
   onUpdateSourceTitle,
   onUploadSourceDescriptionAsset,
+  preserveScrollOnUpdate = false,
   reviewIdentityByPath,
   scrollTarget,
   searchQuery,
@@ -2672,6 +2672,7 @@ export function ReviewCodeView({
   onUpdateSourceDescription?: (body: string) => Promise<void> | void;
   onUpdateSourceTitle?: (title: string) => Promise<void> | void;
   onUploadSourceDescriptionAsset?: (file: File) => Promise<string> | string;
+  preserveScrollOnUpdate?: boolean;
   reviewIdentityByPath?: ReadonlyMap<string, ReviewIdentity>;
   scrollTarget: ReviewScrollTarget | null;
   searchQuery: string;
@@ -2747,6 +2748,41 @@ export function ReviewCodeView({
   const definitionLookupRequestRef = useRef(0);
   const definitionModifierActiveRef = useRef(false);
   const sourceKey = getSourceKey(source);
+  const scrollContextKey =
+    source.type === 'branch-diff' || source.type === 'branch-working-tree'
+      ? `${source.type}:${source.ref}`
+      : sourceKey;
+  const preservedScroll = useRef<{ context: string; path: string | null; top: number } | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    const viewer = codeViewRef.current?.getInstance();
+    const position = preservedScroll.current;
+    let frame: number | null = null;
+    if (
+      preserveScrollOnUpdate &&
+      position?.context === scrollContextKey &&
+      position.top > 0 &&
+      files.some((file) => file.path === position.path)
+    ) {
+      // CodeView first reconciles and measures its updated virtual items.
+      frame = window.requestAnimationFrame(() => {
+        viewer?.scrollTo({ behavior: 'instant', position: position.top, type: 'position' });
+      });
+    }
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      preservedScroll.current = viewer
+        ? {
+            context: scrollContextKey,
+            path: getSelectedPathFromScroll(viewer, files, showWhitespace),
+            top: viewer.getScrollTop(),
+          }
+        : null;
+    };
+  }, [files, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
   const [definitionLookupSourceKey, setDefinitionLookupSourceKey] = useState(sourceKey);
   if (definitionLookupSourceKey !== sourceKey) {
     setDefinitionLookupSourceKey(sourceKey);
