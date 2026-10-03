@@ -453,3 +453,16 @@ test('consumers without a content loader keep deferred content read-only', async
   expect(view.container.textContent).toContain(file.path);
   expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
 });
+
+test('tree review keeps the snapshot focus file ahead of alphabetical siblings', async () => {
+  const snapshot = createSnapshot([
+    createChangedFile('current.md'),
+    createChangedFile('changed.png'),
+  ]);
+  await using view = await renderReact(<ReviewSurface initialMode="tree" snapshot={snapshot} />);
+
+  await waitFor(() => {
+    expect(view.container.querySelectorAll('.codiff-file-header')).toHaveLength(2);
+  });
+  expect(view.container.querySelector('.codiff-file-header')?.textContent).toContain('current.md');
+});

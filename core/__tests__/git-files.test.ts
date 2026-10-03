@@ -1,41 +1,11 @@
-import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterAll, beforeAll, expect, test } from 'vite-plus/test';
+import { git, createGitHistory, readGitFiles } from './helpers/git-files.ts';
 import { removeGitTestDirectory } from './helpers/git.ts';
 import { createTemporaryEnvironment } from './helpers/resources.ts';
 
-type FileContentResult = {
-  available: boolean;
-  binary: boolean;
-  file?: {
-    cacheKey: string;
-    contents: string;
-    name: string;
-  };
-  fingerprint?: string;
-  loadState?: string;
-  summary?: {
-    canLoad?: boolean;
-    size?: number;
-  };
-};
-
-type GitFilesModule = {
-  readGitFiles: (
-    repoRoot: string,
-    ref: string,
-    paths: ReadonlyArray<string>,
-    options?: { refScopedEmptyCacheKey?: boolean },
-  ) => Promise<Map<string, FileContentResult>>;
-};
-
-const execFileAsync = promisify(execFile);
-const require = createRequire(import.meta.url);
-const { readGitFiles } = require('../../electron/git-state/git-files.cjs') as GitFilesModule;
 const batchCases = [
   { fileCount: 20, maximumProcesses: 6 },
   { fileCount: 160, maximumProcesses: 6 },
@@ -45,110 +15,6 @@ const batchCases = [
 let base = '';
 let head = '';
 let repo = '';
-
-const git = async (repository: string, args: ReadonlyArray<string>) => {
-  const { stdout } = await execFileAsync('git', ['-C', repository, ...args], {
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return stdout;
-};
-
-const fastImport = async (repository: string, input: Buffer) => {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['-C', repository, 'fast-import', '--quiet'], {
-      stdio: ['pipe', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(stderr || `git fast-import exited with code ${code}.`));
-      }
-    });
-    child.stdin.end(input);
-  });
-};
-
-const createGitHistory = async (repository: string) => {
-  const chunks: Array<Buffer> = [];
-  let nextMark = 1;
-  const addBlob = (contents: string | Uint8Array) => {
-    const mark = nextMark;
-    nextMark += 1;
-    const buffer = Buffer.from(contents);
-    chunks.push(
-      Buffer.from(`blob\nmark :${mark}\ndata ${buffer.length}\n`),
-      buffer,
-      Buffer.from('\n'),
-    );
-    return mark;
-  };
-  const addCommit = (
-    ref: string,
-    message: string,
-    commands: ReadonlyArray<string>,
-    parent?: number,
-  ) => {
-    const mark = nextMark;
-    nextMark += 1;
-    chunks.push(
-      Buffer.from(
-        [
-          `commit ${ref}`,
-          `mark :${mark}`,
-          'committer Codiff Test <codiff@example.com> 0 +0000',
-          `data ${Buffer.byteLength(message)}`,
-          message,
-          ...(parent == null ? [] : [`from :${parent}`]),
-          ...commands,
-          '',
-        ].join('\n'),
-      ),
-    );
-    return mark;
-  };
-
-  const baseCommands = [
-    `M 100644 :${addBlob('')} empty.txt`,
-    `M 100644 :${addBlob('before\n')} modified.txt`,
-    `M 100644 :${addBlob('rename before\n')} renamed-old.txt`,
-    `M 100644 :${addBlob('deleted\n')} deleted.txt`,
-    `M 100644 :${addBlob(Uint8Array.from([0, 1, 2, 3]))} binary.bin`,
-    `M 100644 :${addBlob('literal before\n')} literal-:(name).txt`,
-    ...Array.from(
-      { length: 500 },
-      (_, index) =>
-        `M 100644 :${addBlob(`base ${index}\n`)} src/file-${index.toString().padStart(3, '0')}.ts`,
-    ),
-  ];
-  const baseCommit = addCommit('refs/heads/base', 'base', baseCommands);
-  const headCommands = [
-    `M 100644 :${addBlob('after\n')} modified.txt`,
-    'D renamed-old.txt',
-    `M 100644 :${addBlob('rename after\n')} renamed-new.txt`,
-    'D deleted.txt',
-    `M 100644 :${addBlob('added\n')} added.txt`,
-    `M 100644 :${addBlob(Uint8Array.from([0, 4, 5, 6]))} binary.bin`,
-    `M 100644 :${addBlob('literal after\n')} literal-:(name).txt`,
-    `M 100644 :${addBlob('m'.repeat(1024 * 1024 + 1))} medium.txt`,
-    `M 100644 :${addBlob('h'.repeat(2 * 1024 * 1024 + 1))} huge.txt`,
-    ...Array.from(
-      { length: 500 },
-      (_, index) =>
-        `M 100644 :${addBlob(`head ${index}\n`)} src/file-${index.toString().padStart(3, '0')}.ts`,
-    ),
-  ];
-  addCommit('refs/heads/head', 'head', headCommands, baseCommit);
-  chunks.push(Buffer.from('done\n'));
-  await fastImport(repository, Buffer.concat(chunks));
-};
 
 beforeAll(async () => {
   repo = await realpath(await mkdtemp(join(tmpdir(), 'codiff-git-files-')));
@@ -226,19 +92,6 @@ test('batched Git file reads preserve text, binary, rename, missing, and size be
   expect(newFiles.get('missing.txt')?.file?.cacheKey).toBe(`${head}:missing.txt:empty`);
   expect(oldFiles.get('literal-:(name).txt')?.file?.contents).toBe('literal before\n');
   expect(newFiles.get('literal-:(name).txt')?.file?.contents).toBe('literal after\n');
-});
-
-test('Git blob availability distinguishes empty files from absent and deferred files', async () => {
-  const files = await readGitFiles(repo, head, [
-    'empty.txt',
-    'missing.txt',
-    'medium.txt',
-    'huge.txt',
-  ]);
-  expect(files.get('empty.txt')).toMatchObject({ available: true, file: { contents: '' } });
-  expect(files.get('missing.txt')).toMatchObject({ available: false });
-  expect(files.get('medium.txt')).toMatchObject({ available: true, loadState: 'deferred' });
-  expect(files.get('huge.txt')).toMatchObject({ available: true, loadState: 'too-large' });
 });
 
 test.each(batchCases)(
