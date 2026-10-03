@@ -593,6 +593,11 @@ const listMergeRequestHistory = async (launchPath, source, limit = 200, context)
   let baseCommits;
   if (!pinned) {
     const metadata = await readMergeRequestMetadata(repoRoot, mergeRequest);
+    const snapshot = {
+      baseSha: metadata.diff_refs?.base_sha,
+      headSha: metadata.diff_refs?.head_sha || metadata.sha,
+    };
+    if (context) assertProviderSnapshot(source, snapshot, 'GitLab');
     const commits = parseGlabJsonPages(
       await glabApi(repoRoot, mergeRequest, [
         '--paginate',
@@ -600,17 +605,9 @@ const listMergeRequestHistory = async (launchPath, source, limit = 200, context)
       ]),
     );
     if (context) {
-      assertProviderSnapshot(
-        source,
-        {
-          baseSha: metadata.diff_refs?.base_sha,
-          headSha: metadata.diff_refs?.head_sha || metadata.sha,
-        },
-        'GitLab',
-      );
       const current = await readMergeRequestMetadata(repoRoot, mergeRequest);
       assertProviderSnapshot(
-        source,
+        snapshot,
         {
           baseSha: current.diff_refs?.base_sha,
           headSha: current.diff_refs?.head_sha || current.sha,

@@ -99,37 +99,42 @@ for (const provider of providers) {
     });
   });
 
-  test(`${provider} capture rejects a review that advances while its commits are read`, async () => {
-    await withRepo(async (repo) => {
-      await writeRepoFile(repo, 'file.txt', 'base\n');
-      await commitAll(repo, 'base');
-      const baseSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-      await writeRepoFile(repo, 'file.txt', 'review\n');
-      await commitAll(repo, 'review');
-      const headSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-      await writeRepoFile(repo, 'file.txt', 'advanced\n');
-      await commitAll(repo, 'advanced');
-      const nextHeadSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-      await git(repo, ['remote', 'add', 'origin', 'https://github.com/fixture/repo.git']);
-      await git(repo, ['config', `url.${repo}.insteadOf`, 'https://github.com/fixture/repo.git']);
-      await git(repo, ['update-ref', 'refs/pull/7/head', nextHeadSha]);
-      await withProviderApi(
-        repo,
-        provider,
-        { baseRefs: [], baseSha, headSha, nextHeadSha },
-        async () => {
-          await expect(
-            listRepositoryHistory(
-              repo,
-              30,
-              { ...sourceFor(provider), baseSha, headSha },
-              { type: 'capture' },
-            ),
-          ).rejects.toThrow('review changed');
-        },
-      );
-    });
-  });
+  test.each(['URL-only', 'pinned'] as const)(
+    `${provider} %s capture rejects a review that advances while its commits are read`,
+    async (sourceKind) => {
+      await withRepo(async (repo) => {
+        await writeRepoFile(repo, 'file.txt', 'base\n');
+        await commitAll(repo, 'base');
+        const baseSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+        await writeRepoFile(repo, 'file.txt', 'review\n');
+        await commitAll(repo, 'review');
+        const headSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+        await writeRepoFile(repo, 'file.txt', 'advanced\n');
+        await commitAll(repo, 'advanced');
+        const nextHeadSha = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+        await git(repo, ['remote', 'add', 'origin', 'https://github.com/fixture/repo.git']);
+        await git(repo, ['config', `url.${repo}.insteadOf`, 'https://github.com/fixture/repo.git']);
+        await git(repo, ['update-ref', 'refs/pull/7/head', nextHeadSha]);
+        await withProviderApi(
+          repo,
+          provider,
+          { baseRefs: [], baseSha, headSha, nextHeadSha },
+          async () => {
+            await expect(
+              listRepositoryHistory(
+                repo,
+                30,
+                sourceKind === 'pinned'
+                  ? { ...sourceFor(provider), baseSha, headSha }
+                  : sourceFor(provider),
+                { type: 'capture' },
+              ),
+            ).rejects.toThrow('review changed');
+          },
+        );
+      });
+    },
+  );
 }
 
 test('GitLab fresh capture pins the target tip before reading later base pages', async () => {

@@ -641,19 +641,14 @@ const listPullRequestHistory = async (launchPath, source, limit = 200, context) 
   const pullRequest = parseGitHubPullRequestUrl(source.url);
   let pinned = context?.type === 'provider' ? context : undefined;
   if (!pinned) {
-    const [metadata, commits] = await Promise.all([
-      readPullRequestMetadata(repoRoot, pullRequest),
-      readPullRequestCommits(repoRoot, pullRequest),
-    ]);
+    const metadata = await readPullRequestMetadata(repoRoot, pullRequest);
+    const snapshot = { baseSha: metadata.base?.sha, headSha: metadata.head?.sha };
+    if (context) assertProviderSnapshot(source, snapshot, 'GitHub');
+    const commits = await readPullRequestCommits(repoRoot, pullRequest);
     if (context) {
-      assertProviderSnapshot(
-        source,
-        { baseSha: metadata.base?.sha, headSha: metadata.head?.sha },
-        'GitHub',
-      );
       const current = await readPullRequestMetadata(repoRoot, pullRequest);
       assertProviderSnapshot(
-        source,
+        snapshot,
         { baseSha: current.base?.sha, headSha: current.head?.sha },
         'GitHub',
       );
