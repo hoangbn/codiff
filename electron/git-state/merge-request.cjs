@@ -562,11 +562,12 @@ const normalizeGitLabCommit = (commit, scope) =>
 const readRepositoryCommits = async (repoRoot, mergeRequest, ref, limit) => {
   const commits = [];
   const perPage = Math.min(limit, 100);
+  let pinnedRef = ref;
   for (let page = 1; commits.length < limit; page += 1) {
     const pageCommits = JSON.parse(
       await glabApi(repoRoot, mergeRequest, [
         `projects/${encodeProjectPath(mergeRequest.projectPath)}/repository/commits?ref_name=${encodeURIComponent(
-          ref,
+          pinnedRef,
         )}&per_page=${perPage}&page=${page}`,
       ]),
     );
@@ -574,6 +575,9 @@ const readRepositoryCommits = async (repoRoot, mergeRequest, ref, limit) => {
       break;
     }
     commits.push(...pageCommits);
+    if (page === 1) {
+      pinnedRef = pageCommits[0].id || pinnedRef;
+    }
     if (pageCommits.length < perPage) {
       break;
     }

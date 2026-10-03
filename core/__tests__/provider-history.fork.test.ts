@@ -31,6 +31,7 @@ async function withProviderApi(
   repo: string,
   provider: (typeof providers)[number],
   data: {
+    advanceBase?: boolean;
     baseRefs: Array<string>;
     baseSha?: string;
     headSha?: string;
@@ -58,15 +59,18 @@ else if (endpoint.includes('/commits?')) {
   const url = new URL(endpoint, 'https://fixture.test/');
   const count = Number(url.searchParams.get('per_page'));
   const page = Number(url.searchParams.get('page'));
-  result = data.baseRefs.slice((page - 1) * count, page * count).map(record);
+  const refs = data.advanceBase && url.searchParams.get('ref_name') === 'main' && page > 1
+    ? ['f'.repeat(40), ...data.baseRefs] : data.baseRefs;
+  result = refs.slice((page - 1) * count, page * count).map(record);
 } else {
   const reads = fs.existsSync(counter) ? Number(fs.readFileSync(counter,'utf8')) : 0;
   fs.writeFileSync(counter, String(reads+1));
   const head = reads > 0 ? data.nextHeadSha || data.headSha : data.headSha;
   result = provider === 'github'
     ? {base:{sha:data.baseSha},head:{sha:head},number:7,title:'Fixture PR'}
-    : {diff_refs:{base_sha:data.baseSha,head_sha:head,start_sha:data.baseSha},sha:head,iid:7};
+    : {diff_refs:{base_sha:data.baseSha,head_sha:head,start_sha:data.baseSha},sha:head,iid:7,target_branch:data.advanceBase ? 'main' : undefined};
 }
+
 process.stdout.write(JSON.stringify(result));
 `,
     { mode: 0o700 },
@@ -127,3 +131,30 @@ for (const provider of providers) {
     });
   });
 }
+
+test('GitLab fresh capture pins the target tip before reading later base pages', async () => {
+  await withRepo(async (repo) => {
+    const baseRefs = Array.from({ length: 250 }, (_, index) =>
+      (index + 1).toString(16).padStart(40, '0'),
+    );
+    const headSha = 'a'.repeat(40);
+    const baseSha = 'b'.repeat(40);
+    await withProviderApi(
+      repo,
+      'gitlab',
+      { advanceBase: true, baseRefs, baseSha, headSha },
+      async () => {
+        const history = await listRepositoryHistory(
+          repo,
+          121,
+          { ...sourceFor('gitlab'), baseSha, headSha },
+          { type: 'capture' },
+        );
+        expect(
+          history.entries.filter((entry) => entry.scope === 'base').map((entry) => entry.ref),
+        ).toEqual(baseRefs.slice(0, 121));
+        expect(history.context).toMatchObject({ baseRef: baseRefs[0] });
+      },
+    );
+  });
+});
