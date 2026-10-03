@@ -85,6 +85,12 @@ const renderingCases = [
   ['autocrlf', 'working-tree'],
   ['attributes-driver', 'working-tree'],
   ['attributes-driver', 'branch-working-tree'],
+  ['orderfile', 'working-tree'],
+  ['orderfile', 'branch-working-tree'],
+  ['textconv', 'working-tree'],
+  ['textconv', 'branch-working-tree'],
+  ['clean-filter', 'working-tree'],
+  ['clean-filter', 'branch-working-tree'],
 ] as const;
 
 test.each(renderingCases)(
@@ -109,6 +115,26 @@ test.each(renderingCases)(
       }
       if (scenario === 'autocrlf') {
         await git(repo, ['config', 'core.autocrlf', 'true']);
+      }
+      if (scenario === 'orderfile') {
+        await writeRepoFile(repo, 'order.txt', `${path}\n`);
+        await git(repo, ['config', 'diff.orderFile', 'order.txt']);
+      }
+      if (scenario === 'textconv' || scenario === 'clean-filter') {
+        await writeRepoFile(repo, 'rules.sed', 's/body/converted/g\n');
+        await writeRepoFile(
+          repo,
+          attributePath,
+          scenario === 'textconv' ? '*.txt diff=custom\n' : '*.txt filter=custom\n',
+        );
+        await git(repo, [
+          'config',
+          scenario === 'textconv' ? 'diff.custom.textconv' : 'filter.custom.clean',
+          'sed -f rules.sed',
+        ]);
+        if (scenario === 'clean-filter') {
+          await git(repo, ['config', 'filter.custom.required', 'true']);
+        }
       }
       await writeRepoFile(repo, path, base);
       if (scenario === 'filemode') {
@@ -145,14 +171,23 @@ test.each(renderingCases)(
         source: state.source,
       };
       const native = await readDiffSectionContent(repo, request);
+      const nativeWithoutWhitespace =
+        scenario === 'textconv' || scenario === 'clean-filter'
+          ? await readDiffSectionContent(repo, { ...request, showWhitespace: false })
+          : null;
       expect(native.patch).toContain(scenario === 'symlinks' ? '+new-target' : '+changed 20');
       if (scenario === 'attributes-driver') {
         expect(native.patch).toContain('@@ -19,7 +19,7 @@ SECTION chosen');
+      }
+      if (scenario === 'textconv' || scenario === 'clean-filter') {
+        expect(native.patch).toContain('-converted 20');
       }
       await using directory = await createTemporaryDirectory('codiff-content-snapshot-');
       const captured = await captureRepositoryContent(state, directory.path);
       await writeRepoFile(repo, path, 'later bytes\n');
       await writeRepoFile(repo, attributePath, '# later attributes\n');
+      await writeRepoFile(repo, 'order.txt', 'later.txt\n');
+      await writeRepoFile(repo, 'rules.sed', 's/body/later/g\n');
       await git(repo, ['config', 'core.filemode', 'true']);
       await git(repo, ['config', 'core.symlinks', 'true']);
       await git(repo, ['config', 'core.autocrlf', 'false']);
@@ -161,6 +196,11 @@ test.each(renderingCases)(
       expect(frozen.patch).toBe(native.patch);
       expect(frozen.oldFile?.contents).toBe(native.oldFile?.contents);
       expect(frozen.newFile?.contents).toBe(native.newFile?.contents);
+      if (nativeWithoutWhitespace) {
+        expect((await captured.readSection({ ...request, showWhitespace: false })).patch).toBe(
+          nativeWithoutWhitespace.patch,
+        );
+      }
     });
   },
 );

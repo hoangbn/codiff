@@ -835,7 +835,7 @@ const createSection = async (repoRoot, item, kind, options = {}) => {
     };
   }
 
-  const patch = await getPatch(repoRoot, item, kind, options);
+  const patch = options.patch ?? (await getPatch(repoRoot, item, kind, options));
 
   return {
     binary: patch.binary || contents.binary,

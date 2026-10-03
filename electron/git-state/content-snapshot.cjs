@@ -1,12 +1,14 @@
 // @ts-check
 
 const { constants, promises: fs } = require('node:fs');
-const { dirname, join } = require('node:path');
+const { dirname, join, resolve } = require('node:path');
 const {
+  createSection,
   getImageMimeType,
   git,
   gitBufferWithInput,
   IMAGE_FILE_LIMIT,
+  parseStatus,
   validateRepositoryPath,
 } = require('./common.cjs');
 const { withBranchSnapshot } = require('./branch-snapshot.cjs');
@@ -15,7 +17,8 @@ const workingTree = require('./working-tree.cjs');
 
 /**
  * Freeze changed raw revisions in a caller-owned directory. The native readers
- * retain their text/image limits and build patches only when requested.
+ * retain their text/image limits. External conversions are frozen while their
+ * source execution context exists; ordinary patches are built on demand.
  * @param {import('../../core/types.ts').RepositoryState} state
  * @param {string} directory
  */
@@ -71,7 +74,16 @@ const captureRepositoryContent = async (state, directory) => {
   };
   await fs.writeFile(env.GIT_CONFIG_GLOBAL, '');
   for (const [key, value] of configuration) {
-    await git(worktree, ['config', '--local', '--replace-all', key, value], { env });
+    // Programs can depend on arbitrary unchanged files. Retain their native
+    // patch results below instead of replaying them in an incomplete checkout.
+    if (key.startsWith('filter.') || /^diff\..*\.textconv$/i.test(key)) continue;
+    let retainedValue = value;
+    if (key.toLowerCase() === 'diff.orderfile' && value) {
+      const orderPath = (await git(state.root, ['config', '--path', '--get', key])).trim();
+      retainedValue = join(gitDirectory, 'diff-order');
+      await fs.copyFile(resolve(state.root, orderPath), retainedValue, constants.COPYFILE_FICLONE);
+    }
+    await git(worktree, ['config', '--local', '--replace-all', key, retainedValue], { env });
   }
   const files = state.files.filter(
     (file) =>
@@ -93,8 +105,19 @@ const captureRepositoryContent = async (state, directory) => {
     ? (await git(state.root, ['check-attr', '-z', '--all', '--', ...paths])).split('\0')
     : [];
   const rules = [];
+  const externalPaths = new Set();
   for (let index = 0; index + 2 < attributes.length; index += 3) {
     const [path, attribute, value] = attributes.slice(index, index + 3);
+    if (
+      configuration.some(
+        ([key]) =>
+          (attribute === 'diff' && key === `diff.${value}.textconv`) ||
+          (attribute === 'filter' &&
+            (key === `filter.${value}.clean` || key === `filter.${value}.process`)),
+      )
+    ) {
+      externalPaths.add(path);
+    }
     const pattern = JSON.stringify(`/${path.replace(/[\\*?\[\]]/g, '\\$&')}`);
     const setting =
       value === 'set'
@@ -108,6 +131,33 @@ const captureRepositoryContent = async (state, directory) => {
   }
   await fs.mkdir(join(gitDirectory, 'info'), { recursive: true });
   await fs.writeFile(join(gitDirectory, 'info', 'attributes'), rules.join(''));
+  /** @type {Map<string, string>} */
+  const nativePatches = new Map();
+  /** @param {import('../../core/types.ts').DiffSectionContentRequest} request */
+  const patchKey = (request) =>
+    JSON.stringify([request.path, request.kind, request.showWhitespace !== false]);
+  /** @param {(request: import('../../core/types.ts').DiffSectionContentRequest) => Promise<import('../../core/types.ts').DiffSection>} readSection */
+  const captureNativePatches = async (readSection) => {
+    for (const file of files) {
+      if (!externalPaths.has(file.path) && !externalPaths.has(file.oldPath)) continue;
+      for (const section of file.sections) {
+        if (section.summary?.canLoad === false) continue;
+        for (const showWhitespace of [false, true]) {
+          const request = { force: true, kind: section.kind, path: file.path, showWhitespace };
+          const native = await readSection(request);
+          if (native.loadState !== 'ready') continue;
+          const path = join(directory, `patch-${nativePatches.size}`);
+          await fs.writeFile(path, JSON.stringify({ binary: native.binary, patch: native.patch }));
+          nativePatches.set(patchKey(request), path);
+        }
+      }
+    }
+  };
+  /** @param {import('../../core/types.ts').DiffSectionContentRequest} request */
+  const readNativePatch = async (request) => {
+    const path = nativePatches.get(patchKey(request));
+    return path ? JSON.parse(await fs.readFile(path, 'utf8')) : undefined;
+  };
   /** @type {Map<string, string>} */
   const imported = new Map();
   const oversized = new Set();
@@ -166,10 +216,29 @@ const captureRepositoryContent = async (state, directory) => {
   if (source.type === 'branch-working-tree') {
     if (!source.baseRef) throw new Error('The combined comparison must have a resolved base.');
     const oldRef = source.baseRef;
-    const retained = await withBranchSnapshot(state.root, async (snapshot) => ({
-      oldTree: await retainTree(state.root, oldRef, snapshot.env),
-      newTree: await retainTree(state.root, snapshot.tree, snapshot.env),
-    }));
+    const retained = await withBranchSnapshot(state.root, async (snapshot) => {
+      await captureNativePatches((request) =>
+        readComparisonSectionContent(
+          state.root,
+          snapshot.tree,
+          oldRef,
+          files,
+          request.path,
+          'captured comparison',
+          {
+            env: snapshot.env,
+            force: request.force,
+            showWhitespace: request.showWhitespace,
+            literalPaths: true,
+            section: { kind: 'combined', ref: `combined:${oldRef}` },
+          },
+        ),
+      );
+      return {
+        oldTree: await retainTree(state.root, oldRef, snapshot.env),
+        newTree: await retainTree(state.root, snapshot.tree, snapshot.env),
+      };
+    });
     for (const file of files) {
       if (oversized.has(file.path) || oversized.has(file.oldPath)) {
         unavailableImages.set(file.path, {
@@ -180,8 +249,8 @@ const captureRepositoryContent = async (state, directory) => {
     }
     return {
       /** @param {import('../../core/types.ts').DiffSectionContentRequest} request */
-      readSection: (request) =>
-        readComparisonSectionContent(
+      readSection: async (request) => {
+        const section = await readComparisonSectionContent(
           worktree,
           retained.newTree,
           retained.oldTree,
@@ -196,7 +265,10 @@ const captureRepositoryContent = async (state, directory) => {
             blobCacheKeys: true,
             section: { kind: 'combined', ref: `combined:${oldRef}` },
           },
-        ),
+        );
+        const patch = section.loadState === 'ready' ? await readNativePatch(request) : undefined;
+        return patch ? { ...section, ...patch } : section;
+      },
       /** @param {import('../../core/types.ts').DiffImageContentRequest} request */
       readImage: async (request) =>
         unavailableImages.get(request.path) ||
@@ -211,6 +283,16 @@ const captureRepositoryContent = async (state, directory) => {
         )),
     };
   }
+  const originalItems = new Map(
+    externalPaths.size
+      ? parseStatus(await git(state.root, ['status', '--porcelain=v1', '-z', '-uno'])).map(
+          (item) => [item.path, item],
+        )
+      : [],
+  );
+  await captureNativePatches((request) =>
+    workingTree.readDiffSectionContent(state.root, { ...request, source }),
+  );
   const head = await git(state.root, ['rev-parse', '--verify', 'HEAD^{commit}']).catch(() => '');
   if (head.trim()) {
     const tree = await retainTree(state.root, head.trim());
@@ -263,7 +345,23 @@ const captureRepositoryContent = async (state, directory) => {
   }
   return {
     /** @param {import('../../core/types.ts').DiffSectionContentRequest} request */
-    readSection: (request) => workingTree.readDiffSectionContent(worktree, request, env),
+    readSection: async (request) => {
+      const patch = await readNativePatch(request);
+      if (!patch) return workingTree.readDiffSectionContent(worktree, request, env);
+      const item = originalItems.get(request.path) || {
+        path: request.path,
+        staged: false,
+        status: 'untracked',
+        unstaged: true,
+        untracked: true,
+      };
+      return createSection(worktree, item, /** @type {'staged' | 'unstaged'} */ (request.kind), {
+        env,
+        force: request.force,
+        patch,
+        showWhitespace: request.showWhitespace,
+      });
+    },
     /** @param {import('../../core/types.ts').DiffImageContentRequest} request */
     readImage: async (request) =>
       unavailableImages.get(`${request.path}:${request.kind}`) ||
