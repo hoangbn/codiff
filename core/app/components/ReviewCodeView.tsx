@@ -475,7 +475,8 @@ function MarkdownPreview({
   sectionId: string;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [ready, setReady] = useState(false);
+  const [readyContents, setReadyContents] = useState<string | null>(null);
+  const ready = readyContents === contents;
   const measure = useCallback(
     (reportedHeight?: number) => {
       const content = contentRef.current;
@@ -493,13 +494,13 @@ function MarkdownPreview({
       if (height == null || height <= 0) {
         return;
       }
-      setReady(true);
+      setReadyContents(contents);
       if (heightCache.get(cacheKey) !== height) {
         heightCache.set(cacheKey, height);
         onLayoutReady(sectionId);
       }
     },
-    [cacheKey, heightCache, onLayoutReady, sectionId],
+    [cacheKey, contents, heightCache, onLayoutReady, sectionId],
   );
 
   useLayoutEffect(() => {

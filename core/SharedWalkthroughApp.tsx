@@ -1258,11 +1258,13 @@ export function ReviewSurface({
                   target="_blank"
                   title={`Open ${sourceLabel} in ${providerLabel}`}
                 >
-                  <span>{sourceLabel}</span>
+                  <span className="review-top-bar-source-label">{sourceLabel}</span>
                   <ArrowSquareOut aria-hidden size={14} weight="bold" />
                 </a>
               ) : (
-                <span className="review-top-bar-source">{sourceLabel}</span>
+                <span className="review-top-bar-source" title={sourceLabel}>
+                  <span className="review-top-bar-source-label">{sourceLabel}</span>
+                </span>
               )
             ) : null}
           </>
