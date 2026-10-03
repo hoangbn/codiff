@@ -163,7 +163,7 @@ test('History fills short pages, stops failed automatic retries, and filters loa
   );
   await view.rerender(
     <ReviewSurface
-      history={{ ...history, error: 'History failed' }}
+      history={{ ...history, entries: [...history.entries], error: 'History failed' }}
       initialMode="history"
       snapshot={createReviewSnapshot([])}
     />,
@@ -183,7 +183,11 @@ test('History fills short pages, stops failed automatic retries, and filters loa
   );
   // Hosts may display the error outside History rather than pass history.error.
   await view.rerender(
-    <ReviewSurface history={history} initialMode="history" snapshot={createReviewSnapshot([])} />,
+    <ReviewSurface
+      history={{ ...history, entries: [...history.entries] }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
   );
   expect(onLoadMore).toHaveBeenCalledTimes(2);
   const nextHistory = {
@@ -206,6 +210,32 @@ test('History fills short pages, stops failed automatic retries, and filters loa
     />,
   );
   expect(onLoadMore).toHaveBeenCalledTimes(3);
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...nextHistory, loading: true }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...nextHistory, entries: nextHistory.entries.map((entry) => ({ ...entry })) }}
+      initialMode="history"
+      snapshot={createReviewSnapshot([])}
+    />,
+  );
+  expect(onLoadMore).toHaveBeenCalledTimes(3);
+  await view.rerender(
+    <ReviewSurface
+      history={{ ...nextHistory, source: { ref: 'b'.repeat(40), type: 'commit' } }}
+      initialMode="history"
+      snapshot={{
+        ...createReviewSnapshot([]),
+        repository: { root: '/repo', source: { ref: 'b'.repeat(40), type: 'commit' } },
+      }}
+    />,
+  );
+  expect(onLoadMore).toHaveBeenCalledTimes(4);
   const input = view.container.querySelector<HTMLInputElement>('[aria-label="Filter history"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(

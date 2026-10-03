@@ -58,7 +58,8 @@ export function HistorySidebar({
   const currentSourceKey = getSourceKey(currentSource);
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const listRef = useRef<HTMLDivElement>(null);
-  const requestedEntries = useRef<ReadonlyArray<HistoryEntry> | null>(null);
+  const pageKey = JSON.stringify([currentSourceKey, entries.map(({ ref, scope }) => [ref, scope])]);
+  const requestedPage = useRef<string | null>(null);
   const rows = useMemo(() => {
     const commitRows = entries.map((entry) => ({
       author: entry.author,
@@ -200,18 +201,18 @@ export function HistorySidebar({
     }
 
     if (element.scrollHeight - element.scrollTop - element.clientHeight < 120) {
-      requestedEntries.current = entries;
+      requestedPage.current = pageKey;
       onLoadMore();
     }
-  }, [entries, hasMore, loading, normalizedQuery, onLoadMore]);
+  }, [hasMore, loading, normalizedQuery, onLoadMore, pageKey]);
 
   useEffect(() => {
-    // A failed page leaves the entries unchanged. Retry only on user scroll or
+    // A failed page leaves the commit identities unchanged. Retry only on user scroll or
     // after a new page/comparison, rather than each loading-state transition.
-    if (requestedEntries.current !== entries) {
+    if (requestedPage.current !== pageKey) {
       maybeLoadMore();
     }
-  }, [entries, maybeLoadMore, rows]);
+  }, [maybeLoadMore, pageKey, rows]);
 
   return (
     <div className="history-list" onScroll={maybeLoadMore} ref={listRef}>
