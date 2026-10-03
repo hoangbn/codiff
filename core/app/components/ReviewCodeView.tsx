@@ -2767,7 +2767,9 @@ export function ReviewCodeView({
     ) {
       // CodeView first reconciles and measures its updated virtual items.
       frame = window.requestAnimationFrame(() => {
-        viewer?.scrollTo({ behavior: 'instant', position: position.top, type: 'position' });
+        frame = window.requestAnimationFrame(() => {
+          viewer?.scrollTo({ behavior: 'instant', position: position.top, type: 'position' });
+        });
       });
     }
     return () => {
