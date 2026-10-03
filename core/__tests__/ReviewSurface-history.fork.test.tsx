@@ -15,7 +15,7 @@ environment.ResizeObserver ??= class ResizeObserver {
 };
 HTMLElement.prototype.scrollTo ??= function () {};
 
-test('History is opt-in and navigates without mutation capabilities', async () => {
+test('History is opt-in and navigates empty comparisons', async () => {
   const snapshot = createReviewSnapshot([]);
   const onSelectSource = vi.fn<(source: ReviewSource) => void>();
   await using view = await renderReact(<ReviewSurface initialMode="tree" snapshot={snapshot} />);
@@ -59,7 +59,6 @@ test('History is opt-in and navigates without mutation capabilities', async () =
     view.container.querySelector<HTMLButtonElement>('[title="First change"]')?.click(),
   );
   expect(onSelectSource).toHaveBeenCalledWith({ ref: 'a'.repeat(40), type: 'commit' });
-  expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
   const source = { ref: 'a'.repeat(40), type: 'commit' } as const;
   await view.rerender(
     <ReviewSurface

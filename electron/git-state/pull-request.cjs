@@ -592,12 +592,13 @@ const readPullRequestCommits = async (repoRoot, pullRequest) => {
 const readRepositoryCommits = async (repoRoot, pullRequest, sha, limit) => {
   /** @type {Array<GitHubCommit>} */
   const commits = [];
+  const perPage = Math.min(limit, 100);
   for (let page = 1; commits.length < limit; page += 1) {
     const pageCommits = JSON.parse(
       await ghApi(repoRoot, [
         `repos/${pullRequest.owner}/${pullRequest.repo}/commits?sha=${encodeURIComponent(
           sha,
-        )}&per_page=${Math.min(limit - commits.length, 100)}&page=${page}`,
+        )}&per_page=${perPage}&page=${page}`,
       ]),
     );
     if (!Array.isArray(pageCommits) || pageCommits.length === 0) {
@@ -605,7 +606,7 @@ const readRepositoryCommits = async (repoRoot, pullRequest, sha, limit) => {
     }
     commits.push(...pageCommits);
   }
-  return commits;
+  return commits.slice(0, limit);
 };
 
 /** @param {GitHubCommit} commit @param {'base' | 'pull-request'} [scope] */
@@ -641,12 +642,19 @@ const listPullRequestHistory = async (launchPath, source, limit = 200, context) 
       readPullRequestMetadata(repoRoot, pullRequest),
       readPullRequestCommits(repoRoot, pullRequest),
     ]);
-    if (context)
+    if (context) {
       assertProviderSnapshot(
         source,
         { baseSha: metadata.base?.sha, headSha: metadata.head?.sha },
         'GitHub',
       );
+      const current = await readPullRequestMetadata(repoRoot, pullRequest);
+      assertProviderSnapshot(
+        source,
+        { baseSha: current.base?.sha, headSha: current.head?.sha },
+        'GitHub',
+      );
+    }
     const remote = await selectPullRequestRemote(repoRoot, pullRequest, metadata.head?.sha);
     await fetchPullRequestHistoryRefs(repoRoot, remote, pullRequest, metadata);
     pinned = {

@@ -561,8 +561,8 @@ const normalizeGitLabCommit = (commit, scope) =>
 /** @param {string} repoRoot @param {any} mergeRequest @param {string} ref @param {number} limit */
 const readRepositoryCommits = async (repoRoot, mergeRequest, ref, limit) => {
   const commits = [];
+  const perPage = Math.min(limit, 100);
   for (let page = 1; commits.length < limit; page += 1) {
-    const perPage = Math.min(limit - commits.length, 100);
     const pageCommits = JSON.parse(
       await glabApi(repoRoot, mergeRequest, [
         `projects/${encodeProjectPath(mergeRequest.projectPath)}/repository/commits?ref_name=${encodeURIComponent(
@@ -578,7 +578,7 @@ const readRepositoryCommits = async (repoRoot, mergeRequest, ref, limit) => {
       break;
     }
   }
-  return commits;
+  return commits.slice(0, limit);
 };
 
 /** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @param {number} [limit] @param {Extract<import('../../core/types.ts').RepositoryHistoryContext, {type: 'provider'}> | {type: 'capture'}} [context] */
@@ -595,7 +595,7 @@ const listMergeRequestHistory = async (launchPath, source, limit = 200, context)
         `${mergeRequestEndpoint(mergeRequest, '/commits')}?per_page=100`,
       ]),
     );
-    if (context)
+    if (context) {
       assertProviderSnapshot(
         source,
         {
@@ -604,6 +604,16 @@ const listMergeRequestHistory = async (launchPath, source, limit = 200, context)
         },
         'GitLab',
       );
+      const current = await readMergeRequestMetadata(repoRoot, mergeRequest);
+      assertProviderSnapshot(
+        source,
+        {
+          baseSha: current.diff_refs?.base_sha,
+          headSha: current.diff_refs?.head_sha || current.sha,
+        },
+        'GitLab',
+      );
+    }
     baseCommits = metadata.target_branch
       ? await readRepositoryCommits(repoRoot, mergeRequest, metadata.target_branch, limit)
       : [];
