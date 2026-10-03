@@ -38,6 +38,7 @@ export function HistorySidebar({
   onSelectSource,
   pullRequestSource,
   searchQuery,
+  startingSelected = false,
   startingSource,
 }: {
   branchSource: Extract<ReviewSource, { type: 'branch-diff' }> | null;
@@ -49,6 +50,7 @@ export function HistorySidebar({
   onSelectSource: (source: ReviewSource) => void;
   pullRequestSource: PullRequestSource | null;
   searchQuery: string;
+  startingSelected?: boolean;
   startingSource?: ReviewSource;
 }) {
   const currentSourceKey = getSourceKey(currentSource);
@@ -205,7 +207,7 @@ export function HistorySidebar({
       !normalizedQuery &&
       !rows.some((row) => row.kind === 'entry' && row.key === getSourceKey(startingSource)) ? (
         <button
-          className={`history-entry${getSourceKey(startingSource) === currentSourceKey ? ' selected' : ''}`}
+          className={`history-entry${startingSelected || getSourceKey(startingSource) === currentSourceKey ? ' selected' : ''}`}
           onClick={() => onSelectSource(startingSource)}
           title="Requested comparison"
           type="button"

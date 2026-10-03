@@ -74,7 +74,7 @@ import {
   readSidebarWidth,
   writeSidebarWidth,
 } from './lib/sidebar-width.ts';
-import { getSourceLabel, getSourceKey } from './lib/source.ts';
+import { getSourceLabel, getSourceKey, getEmptySourceTitle } from './lib/source.ts';
 import type { ReviewContentLoader } from './review-content-loader.ts';
 import type {
   CommitMetadata,
@@ -203,6 +203,7 @@ export type ReviewHistory = {
   onLoadMore: () => void;
   onSelectSource: (source: ReviewSource) => void;
   source: ReviewSource;
+  startingSelected?: boolean;
   startingSource: ReviewSource;
 };
 
@@ -1343,6 +1344,7 @@ export function ReviewSurface({
             onSelectSource={history.onSelectSource}
             pullRequestSource={historySource?.type === 'pull-request' ? historySource : null}
             searchQuery={historySearchQuery}
+            startingSelected={history.startingSelected ?? false}
             startingSource={history.startingSource}
           />
         ) : sidebarMode === 'tree' ? (
@@ -1426,15 +1428,11 @@ export function ReviewSurface({
             threads={generalCommentThreads}
           />
         ) : sidebarMode === 'tree' || sidebarMode === 'history' ? (
-          visibleFiles.length === 0 ? (
+          visibleFiles.length === 0 && !commitMetadata ? (
             <div className="empty-state">
               <div className="empty-panel squircle">
                 <strong>
-                  {fileSearchQuery
-                    ? 'No matching files'
-                    : source.type === 'working-tree'
-                      ? 'No local changes'
-                      : 'No changes'}
+                  {fileSearchQuery ? 'No matching files' : getEmptySourceTitle(source)}
                 </strong>
                 <span>{fileSearchQuery}</span>
               </div>

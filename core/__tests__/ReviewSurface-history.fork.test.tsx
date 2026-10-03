@@ -18,7 +18,11 @@ test('History is opt-in and navigates without mutation capabilities', async () =
   const snapshot = createReviewSnapshot([]);
   const onSelectSource = vi.fn<(source: ReviewSource) => void>();
   await using view = await renderReact(<ReviewSurface initialMode="tree" snapshot={snapshot} />);
-  expect(view.container.querySelector('[role="tab"][title="History"]')).toBeNull();
+  expect(
+    [...view.container.querySelectorAll('[role="tab"]')].some((tab) =>
+      tab.textContent?.includes('History'),
+    ),
+  ).toBe(false);
   await view.rerender(
     <ReviewSurface
       history={{
@@ -54,4 +58,28 @@ test('History is opt-in and navigates without mutation capabilities', async () =
   );
   expect(onSelectSource).toHaveBeenCalledWith({ ref: 'a'.repeat(40), type: 'commit' });
   expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
+  const source = { ref: 'a'.repeat(40), type: 'commit' } as const;
+  await view.rerender(
+    <ReviewSurface
+      commitMetadata={{
+        author: { date: '2026-05-28T00:00:00Z', email: 'grace@example.test', name: 'Grace' },
+        body: 'A message on an empty commit.',
+        committer: { date: '2026-05-28T00:00:00Z', email: 'grace@example.test', name: 'Grace' },
+        files: [],
+        parents: [],
+        ref: source.ref,
+        refs: [],
+        shortRef: 'aaaaaaa',
+        signature: { status: 'N' },
+        stats: { additions: 0, binaryFiles: 0, deletions: 0, files: 0, renamedFiles: 0 },
+        subject: 'Empty but intentional',
+        trailers: [],
+      }}
+      initialMode="tree"
+      snapshot={{ ...snapshot, repository: { ...snapshot.repository, source } }}
+    />,
+  );
+  expect(view.container.textContent).toContain('Empty but intentional');
+  expect(view.container.textContent).toContain('Grace');
+  expect(view.container.textContent).toContain('A message on an empty commit.');
 });
