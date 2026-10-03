@@ -529,6 +529,7 @@ function MarkdownPreview({
           <ReadOnlyMarkdown
             ariaLabel={`Preview ${path}`}
             className="codiff-markdown-preview-editor"
+            key={contents}
             onHeightChange={measure}
             value={contents}
           />
