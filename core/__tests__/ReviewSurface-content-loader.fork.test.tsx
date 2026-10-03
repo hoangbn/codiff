@@ -6,9 +6,10 @@ import { act } from 'react';
 import { expect, test, vi } from 'vite-plus/test';
 import { getVisibleDiffSections } from '../lib/diff.ts';
 import { ReviewSurface, type ReviewContentLoader } from '../react.ts';
-import type { ChangedFile, DiffSection, SharedWalkthroughSnapshot } from '../types.ts';
+import type { ChangedFile, DiffSection } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
 import { renderReact, waitFor } from './helpers/react.tsx';
+import { createReviewSnapshot as createSnapshot } from './helpers/review-snapshot.ts';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   ResizeObserver?: typeof ResizeObserver;
@@ -61,39 +62,6 @@ const createLoadedSection = (file: ChangedFile, marker: string): DiffSection => 
     oldFile: { contents: 'before\n', name: file.path },
     patch: `diff --git a/${file.path} b/${file.path}\n@@ -1 +1,${addedLines.length} @@\n-before\n${addedLines.map((line) => `+${line}`).join('\n')}\n`,
     summary: undefined,
-  };
-};
-
-const createSnapshot = (files: ReadonlyArray<ChangedFile>): SharedWalkthroughSnapshot => {
-  const source = { type: 'working-tree' } as const;
-  return {
-    branch: 'main',
-    codiffVersion: '1.10.1',
-    exportedAt: '2026-08-09T00:00:00.000Z',
-    files,
-    kind: 'codiff-walkthrough-share',
-    preferences: {
-      codeFontFamily: '',
-      codeFontSize: 13,
-      diffStyle: 'split',
-      showWhitespace: false,
-      theme: 'system',
-      wordWrap: false,
-    },
-    repository: { root: '/repo', source },
-    version: 1,
-    walkthrough: {
-      agent: 'codex',
-      chapters: [],
-      focus: 'Review the implementation.',
-      generatedAt: '2026-08-09T00:00:00.000Z',
-      kind: 'narrative',
-      repo: { branch: 'main', root: '/repo' },
-      source,
-      support: [],
-      title: 'Repository review',
-      version: 4,
-    },
   };
 };
 

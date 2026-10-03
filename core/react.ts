@@ -13,6 +13,7 @@ export {
   ReviewSurface,
   type ReviewContentLoader,
   type ReviewCommenting,
+  type ReviewHistory,
   type ReviewMode,
   type ReviewSurfaceProps,
   type ReviewWalkthroughStatus,

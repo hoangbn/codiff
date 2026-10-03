@@ -7,6 +7,9 @@ export {
 } from './share.ts';
 export type {
   ChangedFile,
+  CommitMetadata,
+  HistoryEntry,
+  RepositoryHistory,
   CodiffFeatureFlags,
   CodiffPreferences,
   DiffImageContentRequest,
