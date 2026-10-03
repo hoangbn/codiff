@@ -1688,6 +1688,16 @@ html[data-codiff-platform='darwin'] .sidebar {
   flex-direction: column;
 }
 
+.codiff-web-review[aria-busy='true'] > :not(.review-source-loading) {
+  visibility: hidden;
+}
+
+.codiff-web-review > .review-source-loading {
+  inset: 0;
+  position: absolute;
+  z-index: 1;
+}
+
 .window-drag-region {
   -webkit-app-region: drag;
   height: 12px;

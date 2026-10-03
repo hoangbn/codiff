@@ -1403,10 +1403,9 @@ export function ReviewSurface({
         ) : null}
       </aside>
       <div aria-hidden className="sidebar-resizer" onPointerDown={resizeSidebar} />
-      <main className="review codiff-web-review">
-        {comparisonLoading ? (
-          <ReviewSourceLoading />
-        ) : sidebarMode === 'comments' ? (
+      <main aria-busy={comparisonLoading} className="review codiff-web-review">
+        {comparisonLoading ? <ReviewSourceLoading /> : null}
+        {sidebarMode === 'comments' ? (
           <MergeRequestCommentsView
             canComment={canComment}
             commenting={commenting}
