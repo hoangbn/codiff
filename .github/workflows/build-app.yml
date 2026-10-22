@@ -67,10 +67,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js 24.15.0
+      - name: Use Node.js 26.12.1
         uses: actions/setup-node@v4
         with:
-          node-version: 24.15.0
+          node-version: 26.12.1
 
       - name: Install Dependencies
         run: |
@@ -138,10 +138,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js 24.15.0
+      - name: Use Node.js 26.12.1
         uses: actions/setup-node@v4
         with:
-          node-version: 24.15.0
+          node-version: 26.12.1
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

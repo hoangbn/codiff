@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        node-version: [24]
+        node-version: [26.12.1]
     steps:
       - uses: actions/checkout@v4
       - name: Install native-keymap dependencies
