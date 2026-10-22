@@ -36,6 +36,8 @@ onlyBuiltDependencies:
   - electron-winstaller
   - unrs-resolver
 overrides:
+  # Remove when core-utils/its loader owner drops ~0.18.20 or accepts >=0.25.
+  '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.12
   extract-zip>yauzl: ^3.4.0
   vite@*: 'catalog:'
 patchedDependencies:
