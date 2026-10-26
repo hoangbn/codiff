@@ -221,7 +221,7 @@ export const getMarkdownPreviewContents = (
     return null;
   }
 
-  const loaded = getLoadedSectionContents(file, section);
+  const loaded = getLoadedSectionContents(section);
   const newFile = section.newFile ?? loaded?.newFile;
   const oldFile = section.oldFile ?? loaded?.oldFile;
   const isNew = (file.status === 'added' || file.status === 'untracked') && !oldFile?.contents;

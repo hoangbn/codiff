@@ -455,14 +455,6 @@ export function ReviewSurface({
       ? files
       : [focusFile, ...files.slice(0, focusIndex), ...files.slice(focusIndex + 1)];
   }, [fileSearchQuery, focusPath, reviewFiles, snapshot.preferences.showWhitespace]);
-  const totalLineCount = useMemo(
-    () =>
-      getTotalDiffLineCount(
-        visibleFiles.map((file) => getDiffLineCount(file, snapshot.preferences.showWhitespace)),
-      ),
-    [snapshot.preferences.showWhitespace, visibleFiles],
-  );
-  const showTotalLineCount = sidebarMode !== 'comments' && totalLineCount.countable;
   const visibleSelectedPath =
     selectedPath && visibleFiles.some((file) => file.path === selectedPath)
       ? selectedPath

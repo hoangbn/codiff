@@ -254,9 +254,9 @@ type SectionContextLoadState = 'error' | 'loading';
 function CodeViewHeader({
   allowViewedToggle,
   canCreateFileComment,
+  contextLoadState,
   editActions,
   isEditing = false,
-  contextLoadState,
   isSectionLoading,
   meta,
   onCreateFileComment,
@@ -270,9 +270,9 @@ function CodeViewHeader({
 }: {
   allowViewedToggle: boolean;
   canCreateFileComment: boolean;
+  contextLoadState: SectionContextLoadState | undefined;
   editActions?: ReactNode;
   isEditing?: boolean;
-  contextLoadState: SectionContextLoadState | undefined;
   isSectionLoading: boolean;
   meta: CodeViewItemMetadata;
   onCreateFileComment: () => void;
@@ -412,11 +412,11 @@ function CodeViewHeader({
           </Button>
         ) : null}
         {editActions}
-        {canLoadSection && !readOnly ? (
+        {canLoadSection ? (
           <button
             className="codiff-load-button"
             disabled={isSectionLoading}
-            onClick={() => onLoadSection(file, section)}
+            onClick={() => onLoadSection?.(file, section)}
             title={isSectionLoading ? 'Loading file contents' : 'Load file contents'}
             type="button"
           >

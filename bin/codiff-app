@@ -394,6 +394,24 @@ is_git_range_ref() {
     is_git_commit_ref "$1" "$range_head"
 }
 
+# Preserve a failing explicit range rather than falling back to local content.
+# Invalid range-shaped branch names stay branches, matching the parser's
+# deliberately conservative range recognition.
+is_invalid_git_range_ref() {
+  case "$2" in
+    *'^{/'*'}..'*) return 0 ;;
+    *..*..*) return 1 ;;
+    *..*) ;;
+    *) return 1 ;;
+  esac
+  range_base="${2%%..*}"
+  range_head="${2#*..}"
+  case "$range_head" in
+    .*) range_head="${range_head#.}" ;;
+  esac
+  ! is_git_commit_ref "$1" "$range_base" && is_git_commit_ref "$1" "$range_head"
+}
+
 is_git_repository() {
   git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1
 }
@@ -698,6 +716,9 @@ if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
 
   if is_git_range_ref "$repository_context" "$source_ref"; then
     range_ref="$source_ref"
+  elif is_invalid_git_range_ref "$repository_context" "$source_ref"; then
+    printf '%s\n' "codiff: invalid range: $source_ref" >&2
+    exit 1
   elif is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
     commit_ref="$source_ref"
   elif is_git_branch_ref "$repository_context" "$source_ref"; then
