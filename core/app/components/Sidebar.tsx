@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { matchesShortcut } from '../../config/keymap.ts';
 import type { CodiffKeymap } from '../../config/types.ts';
 import type { PullRequestSource, SidebarMode, WalkthroughError } from '../../lib/app-types.ts';
@@ -179,34 +179,5 @@ export function Sidebar({
         ) : null}
       </DiffSummaryFooter>
     </>
-  );
-}
-
-export function DiffLineCountBadge({
-  ariaLabelPrefix,
-  className = 'codiff-line-count',
-  lineCount,
-}: {
-  ariaLabelPrefix?: string;
-  className?: string;
-  lineCount: DiffLineCount;
-}) {
-  if (!lineCount.countable) {
-    return null;
-  }
-
-  const title = getDiffLineCountTitle(lineCount);
-
-  return (
-    <span
-      aria-label={ariaLabelPrefix ? `${ariaLabelPrefix}: ${title}` : title}
-      className={className}
-      title={ariaLabelPrefix ? `${ariaLabelPrefix}: ${title}` : title}
-    >
-      <span className="codiff-line-count-added">+{formatLineCountNumber(lineCount.additions)}</span>
-      <span className="codiff-line-count-deleted">
-        -{formatLineCountNumber(lineCount.deletions)}
-      </span>
-    </span>
   );
 }

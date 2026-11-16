@@ -209,7 +209,7 @@ importers:
         version: 4.1.2
       zod:
         specifier: ^4.6.5
-        version: 4.6.5
+        version: 4.6.7
     devDependencies:
       '@electron-forge/cli':
         specifier: ^8.0.1
@@ -336,8 +336,8 @@ importers:
         version: 1.5.0(typescript@7.0.2)
     devDependencies:
       '@types/node':
-        specifier: ^26.6.3
-        version: 26.6.3
+        specifier: ^26.6.6
+        version: 26.6.6
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -348,8 +348,8 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
       vite-plus:
-        specifier: 1.0.0
-        version: 1.0.0(@types/node@26.6.3)(@vitest/ui@5.0.1)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.1(@noble/hashes@2.4.0))(terser@5.51.2)(tsx@4.23.15)(typescript@7.0.2)
+        specifier: 'catalog:'
+        version: 1.6.0(@types/node@26.6.6)(@vitest/ui@5.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@31.0.1(@noble/hashes@2.4.0))(tsx@4.23.15)(typescript@7.0.2)(yaml@2.9.1)
 
   service:
     dependencies:

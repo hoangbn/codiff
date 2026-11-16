@@ -75,11 +75,11 @@
     "valibot": "^1.5.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "typescript": "^7.0.2",
-    "vite-plus": "1.0.0"
+    "vite-plus": "catalog:"
   },
   "peerDependencies": {
     "react": "^19.2.0",

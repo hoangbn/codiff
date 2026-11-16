@@ -2664,8 +2664,8 @@ export function ReviewCodeView({
   onUpdateSourceDescription,
   onUpdateSourceTitle,
   onUploadSourceDescriptionAsset,
-  renderMarkdownAs = 'preview',
   preserveScrollOnUpdate = false,
+  renderMarkdownAs = 'preview',
   reviewIdentityByPath,
   scrollTarget,
   searchQuery,
@@ -2732,8 +2732,8 @@ export function ReviewCodeView({
   onUpdateSourceDescription?: (body: string) => Promise<void> | void;
   onUpdateSourceTitle?: (title: string) => Promise<void> | void;
   onUploadSourceDescriptionAsset?: (file: File) => Promise<string> | string;
-  renderMarkdownAs?: CodiffPreferences['renderMarkdownAs'];
   preserveScrollOnUpdate?: boolean;
+  renderMarkdownAs?: CodiffPreferences['renderMarkdownAs'];
   reviewIdentityByPath?: ReadonlyMap<string, ReviewIdentity>;
   scrollTarget: ReviewScrollTarget | null;
   searchQuery: string;

@@ -69,6 +69,18 @@ const createAddedMarkdownFile = (contents: string, fingerprint: string) => {
   };
 };
 
+const createCombinedFile = (contents: string, fingerprint: string) => {
+  const file = createLoadedMarkdownFile(contents, fingerprint);
+  return {
+    ...file,
+    sections: file.sections.map((section) => ({
+      ...section,
+      id: 'plan.md:combined:1111111111111111111111111111111111111111',
+      kind: 'combined' as const,
+    })),
+  } satisfies ChangedFile;
+};
+
 const editMarkdown = async (container: HTMLElement) => {
   const button = container.querySelector<HTMLButtonElement>(
     '.codiff-file-header button[aria-label="Edit plan.md"]',
