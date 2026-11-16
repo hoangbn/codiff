@@ -71,13 +71,30 @@ const createAddedMarkdownFile = (contents: string, fingerprint: string) => {
 
 const createCombinedFile = (contents: string, fingerprint: string) => {
   const file = createLoadedMarkdownFile(contents, fingerprint);
+  const section = file.sections[0]!;
   return {
     ...file,
-    sections: file.sections.map((section) => ({
-      ...section,
-      id: 'plan.md:combined:1111111111111111111111111111111111111111',
-      kind: 'combined' as const,
-    })),
+    sections: [
+      {
+        ...section,
+        id: 'plan.md:commit',
+        kind: 'commit' as const,
+        newFile: {
+          contents: '# Committed\n',
+          name: file.path,
+        },
+        patch: 'diff --git a/plan.md b/plan.md\n@@ -1 +1 @@\n-# Original\n+# Committed\n',
+      },
+      {
+        ...section,
+        id: 'plan.md:unstaged',
+        kind: 'unstaged' as const,
+        oldFile: {
+          contents: '# Committed\n',
+          name: file.path,
+        },
+      },
+    ],
   } satisfies ChangedFile;
 };
 

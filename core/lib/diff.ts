@@ -90,9 +90,22 @@ export const updateDiffSection = (
 // Full file contents fetched lazily for patch-only sections via the CodeView
 // `loadDiffFiles` option. Kept outside React state so the library's in-place
 // hydration of the rendered diff is not reset by re-renders. Section object
-// identity scopes the cache to one repository snapshot and host loader.
-const loadedSectionContents = new WeakMap<DiffSection, FileDiffLoadedFiles>();
-const pendingSectionLoads = new WeakMap<DiffSection, Promise<FileDiffLoadedFiles>>();
+// identity scopes the cache to one repository snapshot and host loader; the key
+// omits the whitespace flag so re-parses after a whitespace toggle reuse contents.
+const getLoadedContentsKey = (file: ChangedFile, section: DiffSection) =>
+  `${file.fingerprint}:${section.id}:${getSectionCacheIdentity(section)}`;
+
+const loadedSectionContents = new WeakMap<DiffSection, Map<string, FileDiffLoadedFiles>>();
+const pendingSectionLoads = new WeakMap<DiffSection, Map<string, Promise<FileDiffLoadedFiles>>>();
+
+const getSectionMap = <T>(cache: WeakMap<DiffSection, Map<string, T>>, section: DiffSection) => {
+  let map = cache.get(section);
+  if (!map) {
+    map = new Map();
+    cache.set(section, map);
+  }
+  return map;
+};
 
 type DiffContextBoundary = {
   addition: number;
@@ -171,19 +184,21 @@ const fileDiffSectionLookup = new WeakMap<
 export const getSectionForFileDiff = (fileDiff: FileDiffMetadata) =>
   fileDiffSectionLookup.get(fileDiff);
 
-const getLoadedSectionContents = (section: DiffSection) => loadedSectionContents.get(section);
+const getLoadedSectionContents = (file: ChangedFile, section: DiffSection) =>
+  loadedSectionContents.get(section)?.get(getLoadedContentsKey(file, section));
 
 export const loadSectionContents = (
   file: ChangedFile,
   section: DiffSection,
   load: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>,
 ): Promise<FileDiffLoadedFiles> => {
-  const loaded = loadedSectionContents.get(section);
+  const key = getLoadedContentsKey(file, section);
+  const loaded = getLoadedSectionContents(file, section);
   if (loaded) {
     return Promise.resolve(loaded);
   }
 
-  const pending = pendingSectionLoads.get(section);
+  const pending = pendingSectionLoads.get(section)?.get(key);
   if (pending) {
     return pending;
   }
@@ -194,13 +209,13 @@ export const loadSectionContents = (
       // contents reach it, so cache hits keep returning the hydrated diff.
       // The hydrated re-parse branch in `parseSectionDiffWithOptions` covers
       // re-parses under a different cache key (e.g. a whitespace toggle).
-      loadedSectionContents.set(section, files);
+      getSectionMap(loadedSectionContents, section).set(key, files);
       return files;
     })
     .finally(() => {
-      pendingSectionLoads.delete(section);
+      pendingSectionLoads.get(section)?.delete(key);
     });
-  pendingSectionLoads.set(section, promise);
+  getSectionMap(pendingSectionLoads, section).set(key, promise);
   return promise;
 };
 
@@ -221,7 +236,7 @@ export const getMarkdownPreviewContents = (
     return null;
   }
 
-  const loaded = getLoadedSectionContents(section);
+  const loaded = getLoadedSectionContents(file, section);
   const newFile = section.newFile ?? loaded?.newFile;
   const oldFile = section.oldFile ?? loaded?.oldFile;
   const isNew = (file.status === 'added' || file.status === 'untracked') && !oldFile?.contents;
@@ -440,7 +455,7 @@ export const parseSectionDiffWithOptions = (
       ?.files[0];
     if (parsedFileDiff) {
       const context = focusedSectionContext.get(section);
-      const loaded = parsedFileDiff.isPartial ? getLoadedSectionContents(section) : undefined;
+      const loaded = parsedFileDiff.isPartial ? getLoadedSectionContents(file, section) : undefined;
       let hydrated: FileDiffMetadata | null = null;
       if (
         context &&

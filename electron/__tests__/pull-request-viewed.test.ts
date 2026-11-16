@@ -69,7 +69,7 @@ process.stdin.on('end', () => {
     } else {
       const second = args.includes('cursor=next-page');
       response = {data: {repository: {pullRequest: {
-        headRefOid: process.env.CODIFF_VIEWED_TEST_HEAD || 'head-sha',
+        headRefOid: process.env.CODIFF_VIEWED_TEST_HEAD || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         files: {
           nodes: second ? [{path: 'renamed.ts', viewerViewedState: 'VIEWED'}] : [
             {path: 'viewed.ts', viewerViewedState: 'VIEWED'},
@@ -88,7 +88,7 @@ process.stdin.on('end', () => {
     process.stdout.write('');
     return;
   } else {
-    response = {node_id: 'PR_test', head: {sha: 'head-sha'}, ...JSON.parse(process.env.CODIFF_PR_TEST_METADATA || '{}')};
+    response = {node_id: 'PR_test', head: {sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}, ...JSON.parse(process.env.CODIFF_PR_TEST_METADATA || '{}')};
   }
   process.stdout.write(JSON.stringify(response));
 });
@@ -170,7 +170,7 @@ test('keeps the PR usable when progress lookup fails or belongs to a newer head'
   expect(failed.viewedFiles).toBeUndefined();
   using _newHead = createTemporaryEnvironment({
     CODIFF_VIEWED_TEST_ERROR: undefined,
-    CODIFF_VIEWED_TEST_HEAD: 'new-head',
+    CODIFF_VIEWED_TEST_HEAD: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   });
   expect((await readPullRequestState(directory.path, source)).viewedFiles).toBeUndefined();
 });
@@ -207,7 +207,7 @@ test('requires a refresh before marking an older PR head as viewed', async () =>
   await expect(
     setPullRequestFileViewed(directory.path, {
       path: 'viewed.ts',
-      source: { ...source, headSha: 'old-head' },
+      source: { ...source, headSha: 'cccccccccccccccccccccccccccccccccccccccc' },
       viewed: true,
     }),
   ).rejects.toThrow('Refresh before marking files as Viewed');

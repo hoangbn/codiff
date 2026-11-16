@@ -1321,7 +1321,7 @@ const submitPullRequestReview = async (launchPath, request) => {
 const setPullRequestFileViewed = async (launchPath, request) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const pullRequest = parseGitHubPullRequestUrl(request.source.url);
-  validateRepositoryPath(request.path);
+  validateProviderPath(request.path);
   if (typeof request.viewed !== 'boolean') {
     throw new Error('Expected a boolean file viewed state.');
   }
