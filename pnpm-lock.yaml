@@ -335,6 +335,12 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(typescript@7.0.2)
     devDependencies:
+      '@types/hast':
+        specifier: ^3.0.4
+        version: 3.0.5
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -348,7 +354,7 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
       vite-plus:
-        specifier: 'catalog:'
+        specifier: 1.6.0
         version: 1.6.0(@types/node@26.6.6)(@vitest/ui@5.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@31.0.1(@noble/hashes@2.4.0))(tsx@4.23.15)(typescript@7.0.2)(yaml@2.9.1)
 
   service:
