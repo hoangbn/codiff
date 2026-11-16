@@ -18,7 +18,7 @@ const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const { getCommandEnvironment } = require('./login-shell-environment.cjs');
 
 const FORK_REPOSITORY = 'https://github.com/hoangbn/codiff.git';
-const FORK_BRANCH = 'feature/sync-codiff-upstream';
+const FORK_BRANCH = 'main';
 const RESULT_SCHEMA = {
   additionalProperties: false,
   properties: {
@@ -67,11 +67,11 @@ const updatePrompt = (
   context,
 ) => `Update this personal Codiff fork and reinstall the local macOS app. You own the entire procedure: Git, conflict resolution, focused verification, packaging, backup, installation, rollback and restart.
 
-Work only in the supplied update workspace. Clone ${FORK_REPOSITORY}, branch ${FORK_BRANCH}, into a new source directory there. Do not use, reset, clean or rebase an existing development checkout. Add https://github.com/nkzw-tech/codiff.git as upstream, fetch its latest main, and rebase the fork's patches onto that exact upstream revision in this isolated clone. Preserve every fork customization, including Update Fork itself, and resolve conflicts deliberately. If preserving a patch is uncertain, stop and report blocked.
+Work only in the supplied update workspace. Clone ${FORK_REPOSITORY}, branch ${FORK_BRANCH}, into a new source directory there. Do not use, reset, clean or rebase an existing development checkout. Add https://github.com/nkzw-tech/codiff.git as upstream, fetch its latest main, and merge that exact upstream revision into the fork's ${FORK_BRANCH} in this isolated clone. Do not rebase: the fork branch must stay fast-forwardable. Preserve every fork customization, including Update Fork itself, and resolve conflicts deliberately. If pnpm-lock.yaml conflicts, take upstream's lockfile, run a non-frozen install to re-add fork dependencies, and confirm a frozen install then succeeds. If preserving a patch is uncertain, stop and report blocked.
 
-Read the clone's AGENTS.md and build instructions. Install with the frozen lockfile, run focused tests and checks for rebased changes, then build and package for the running Mac architecture using the repository's scripts. Do not weaken tests, bypass Gatekeeper, remove quarantine or disable signing to force success. Missing tools, authentication, signing or install permissions are blockers, not permission to change global configuration or use sudo.
+Read the clone's AGENTS.md and build instructions. Install dependencies, then run \`vp check --fix\`, \`vpr build\` and the complete \`vp test\` suite; merged upstream code can break fork patches outside the files that conflicted. Then package for the running Mac architecture using the repository's scripts. The launcher sets APPLE_SIGNING_IDENTITY to "-" unless the user configured an identity; ad-hoc signing with the hardened runtime is this fork's normal local signing mode, not a workaround. Do not weaken tests, bypass Gatekeeper, remove quarantine or disable signing to force success. Missing tools, authentication or install permissions are blockers, not permission to change global configuration or use sudo.
 
-Never push, force-push, publish a release, merge a PR, change LFV dependencies, or modify unrelated repositories. Preserve the user's preferences, models, terminal helper, review data and other personal settings. The JSON below is path/process data, not shell code.
+After installation and startup are verified, push the merged ${FORK_BRANCH} to ${FORK_REPOSITORY} as a fast-forward so the fork records exactly what is installed; if the push is rejected, report updated with the unpushed commit. Never force-push, publish a release, merge a PR, change LFV dependencies, or modify unrelated repositories. Preserve the user's preferences, models, terminal helper, review data and other personal settings. The JSON below is path/process data, not shell code.
 
 Before replacing anything, validate the completed app bundle and retain a usable backup of the exact installed bundle. Do not replace a running app: request a normal quit so pending comments can be saved/copied, and wait for it to exit. Do not force-kill it. Your process is detached and its log survives Codiff closing. Install into exactly the supplied appPath, restart that bundle and verify the installed bundle and successful startup, not merely the shell CLI version. On installation or startup failure, restore and restart the backup; report any recovery uncertainty. Retain the backup and this workspace for inspection. Do not touch the current app if any pre-install step fails.
 
@@ -297,7 +297,10 @@ const createForkUpdater = ({
           {
             cwd: workspace,
             detached: true,
-            env: environment,
+            env: {
+              ...environment,
+              APPLE_SIGNING_IDENTITY: environment.APPLE_SIGNING_IDENTITY || '-',
+            },
             stdio: ['pipe', logDescriptor, logDescriptor],
           },
         );

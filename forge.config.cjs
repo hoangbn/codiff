@@ -145,6 +145,8 @@ module.exports = {
       continueOnError: false,
       hardenedRuntime: true,
       identity: process.env.APPLE_SIGNING_IDENTITY,
+      // Fork: "-" ad-hoc signs local Update Fork builds, which have no keychain identity to validate.
+      ...(process.env.APPLE_SIGNING_IDENTITY === '-' ? { identityValidation: false } : {}),
       optionsForFile: () => ({
         entitlements: entitlementsPath,
       }),

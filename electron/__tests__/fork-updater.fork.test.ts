@@ -117,15 +117,18 @@ test('launches one detached Codex task in an isolated workspace with durable out
   expect(command.options).toMatchObject({
     cwd: workspace,
     detached: true,
-    env: { PATH: '/test/bin' },
+    env: { APPLE_SIGNING_IDENTITY: '-', PATH: '/test/bin' },
   });
   expect(command.options.stdio?.[1]).toBeTypeOf('number');
   expect(command.options.stdio?.[2]).toBe(command.options.stdio?.[1]);
   const prompt = command.stdin.read().toString();
   expect(prompt).toContain('https://github.com/hoangbn/codiff.git');
-  expect(prompt).toContain('feature/sync-codiff-upstream');
+  expect(prompt).toContain('branch main');
+  expect(prompt).toContain('Do not rebase');
   expect(prompt).toContain('https://github.com/nkzw-tech/codiff.git');
-  expect(prompt).toContain('Never push, force-push, publish a release');
+  expect(prompt).toContain('complete `vp test` suite');
+  expect(prompt).toContain('as a fast-forward');
+  expect(prompt).toContain('Never force-push, publish a release');
   expect(prompt).toContain('restore and restart the backup');
   expect(prompt).toContain(options.appPath);
   expect(await readFile(join(workspace, 'task.txt'), 'utf8')).toBe(prompt);

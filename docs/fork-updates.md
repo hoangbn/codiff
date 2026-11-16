@@ -2,8 +2,9 @@
 
 This fork's desktop app uses **Update Fork**, not upstream's release updater.
 Click the sidebar button or **Codiff → Update Fork** to launch your installed
-Codex CLI. Codex handles the whole update: fetch, rebase, resolve conflicts,
-focused checks, build, backup, reinstall and restart. It uses the current
+Codex CLI. Codex handles the whole update: fetch, merge upstream, resolve
+conflicts, full checks and tests, build, backup, reinstall, restart and a
+fast-forward push of the installed source. It uses the current
 OpenAI model preference and existing Codex authentication. No fork release is
 required.
 
@@ -12,10 +13,13 @@ interactive approval prompts.** The task instructions constrain its work, but
 they are not a security sandbox. Only use this with a trusted fork, upstream and
 Codex configuration. Nothing runs automatically on startup or on a timer.
 
-The source is `hoangbn/codiff`, branch `feature/sync-codiff-upstream`; upstream
-is `nkzw-tech/codiff`, branch `main`. The launcher creates a fresh private
-workspace for every attempt. Codex is instructed not to touch active development
-checkouts, push branches, publish releases or change LFV dependencies. It must
+The source is `hoangbn/codiff`, branch `main`; upstream is `nkzw-tech/codiff`,
+branch `main`. Codex merges upstream instead of rebasing, so fork `main` keeps
+real upstream ancestry and each update only resolves new conflicts. After a
+verified install it fast-forwards fork `main` to the installed source, so the
+next update starts from it. The launcher creates a fresh private workspace for
+every attempt. Codex is instructed not to touch active development checkouts,
+force-push, publish releases or change LFV dependencies. It must
 preserve fork patches and personal settings, retain a backup, stop before
 installation if checks fail, and restore the backup if installation/startup
 fails. These installation decisions belong to Codex, not a second updater
@@ -50,8 +54,11 @@ An interrupted process without a valid result is an error, not success.
   launches and other operating systems report an actionable error without
   launching Codex or falling back to upstream's installer.
 - Install/authenticate Codex beforehand. Existing `CODIFF_CODEX_PATH` discovery
-  is supported; dependencies and signing requirements come from the fork's
-  build instructions. Missing credentials, tools or permissions are blockers.
+  is supported; dependencies come from the fork's build instructions. Missing
+  credentials, tools or permissions are blockers.
+- Builds are ad-hoc signed (`APPLE_SIGNING_IDENTITY=-`) unless you set
+  `APPLE_SIGNING_IDENTITY` to a Developer ID identity before launching Codiff.
+  Forge's default requires a keychain identity, which blocked earlier updates.
 - The fork branch must contain the reviewed patches to preserve, including this
   updater. Uncommitted changes or ad-hoc edits inside an installed bundle are
   not source patches; commit those customizations to the fork first.
