@@ -227,6 +227,16 @@ export type MarkdownPreviewContents = {
   oldContents?: string;
 };
 
+// The Markdown editor never finishes rendering very large documents, so larger
+// files keep the regular diff view.
+export const MAX_MARKDOWN_PREVIEW_LENGTH = 256 * 1024;
+
+const withinMarkdownPreviewLimit = (preview: MarkdownPreviewContents) =>
+  preview.contents.length <= MAX_MARKDOWN_PREVIEW_LENGTH &&
+  (preview.oldContents?.length ?? 0) <= MAX_MARKDOWN_PREVIEW_LENGTH
+    ? preview
+    : null;
+
 export const getMarkdownPreviewContents = (
   file: ChangedFile,
   section: DiffSection,
@@ -241,20 +251,20 @@ export const getMarkdownPreviewContents = (
   const oldFile = section.oldFile ?? loaded?.oldFile;
   const isNew = (file.status === 'added' || file.status === 'untracked') && !oldFile?.contents;
   if (newFile && (oldFile || isNew)) {
-    return {
+    return withinMarkdownPreviewLimit({
       contents: newFile.contents,
       oldContents: isNew ? undefined : oldFile?.contents,
-    };
+    });
   }
 
   if (file.status === 'deleted' && oldFile) {
-    return { contents: '', oldContents: oldFile.contents };
+    return withinMarkdownPreviewLimit({ contents: '', oldContents: oldFile.contents });
   }
 
   return isNew
-    ? {
+    ? withinMarkdownPreviewLimit({
         contents: joinDiffLines(fileDiff.additionLines),
-      }
+      })
     : null;
 };
 
