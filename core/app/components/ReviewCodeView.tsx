@@ -2894,9 +2894,7 @@ export function ReviewCodeView({
       const rendered = viewer
         .getRenderedItems()
         .find((item) => item.id === getItemId(anchor.section));
-      const line = rendered?.instance.getNumericScrollAnchor(
-        top + codeViewItemMetrics.diffHeaderHeight - anchor.top,
-      );
+      const line = rendered?.instance.getNumericScrollAnchor(top + headerHeight - anchor.top);
       preservedScroll.current = {
         context: scrollContextKey,
         kind: anchor.section.kind,
@@ -2910,7 +2908,7 @@ export function ReviewCodeView({
               side: line.side,
               type: 'line',
               // Line targets subtract the sticky header; item targets do not.
-              offset: anchor.top + line.top - top - codeViewItemMetrics.diffHeaderHeight,
+              offset: anchor.top + line.top - top - headerHeight,
             }
           : {
               align: 'start',
@@ -2921,7 +2919,7 @@ export function ReviewCodeView({
             },
       };
     };
-  }, [files, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
+  }, [files, headerHeight, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
   const [definitionLookupSourceKey, setDefinitionLookupSourceKey] = useState(sourceKey);
   if (definitionLookupSourceKey !== sourceKey) {
     setDefinitionLookupSourceKey(sourceKey);
