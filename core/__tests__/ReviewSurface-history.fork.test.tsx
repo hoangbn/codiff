@@ -4,7 +4,7 @@ import { expect, test, vi } from 'vite-plus/test';
 import type { ReviewSource } from '../index.ts';
 import { ReviewSurface } from '../react.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
-import { renderReact } from './helpers/react.tsx';
+import { renderReact, waitFor } from './helpers/react.tsx';
 import { createReviewSnapshot } from './helpers/review-snapshot.ts';
 
 const environment = globalThis as typeof globalThis & { ResizeObserver?: typeof ResizeObserver };
@@ -82,7 +82,10 @@ test('History is opt-in and navigates empty comparisons', async () => {
   );
   expect(view.container.textContent).toContain('Empty but intentional');
   expect(view.container.textContent).toContain('Grace');
-  expect(view.container.textContent).toContain('A message on an empty commit.');
+  // The commit message renders through a lazily loaded Markdown view.
+  await waitFor(() =>
+    expect(view.container.textContent).toContain('A message on an empty commit.'),
+  );
 });
 
 test('History marks a resolved starting row and does not apply the hidden Tree filter', async () => {
@@ -260,4 +263,46 @@ test('History fills short pages, stops failed automatic retries, and filters loa
     />,
   );
   expect(onLoadMore).not.toHaveBeenCalled();
+});
+
+test('embedded pull request History stays scoped to the pull request', async () => {
+  const source = {
+    host: 'github.com',
+    number: 7,
+    owner: 'fixture',
+    projectPath: 'fixture/repo',
+    provider: 'github',
+    repo: 'repo',
+    title: 'Provider review',
+    type: 'pull-request',
+    url: 'https://github.com/fixture/repo/pull/7',
+  } satisfies ReviewSource;
+  const snapshot = createReviewSnapshot([createChangedFile('report.md')]);
+  await using view = await renderReact(
+    <ReviewSurface
+      history={{
+        entries: [
+          {
+            author: 'Ada',
+            committedAt: 1_780_000_000_000,
+            parents: [],
+            ref: 'a'.repeat(40),
+            scope: 'pull-request',
+            subject: 'Review change',
+          },
+        ],
+        hasMore: false,
+        loading: false,
+        onLoadMore: () => {},
+        onSelectSource: () => {},
+        source,
+        startingSource: source,
+      }}
+      initialMode="history"
+      snapshot={{ ...snapshot, repository: { ...snapshot.repository, source } }}
+    />,
+  );
+
+  expect(view.container.textContent).toContain('Review change');
+  expect(view.container.textContent).not.toContain('Uncommitted changes');
 });

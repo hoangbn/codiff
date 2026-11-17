@@ -2,7 +2,7 @@ import { expect, test } from 'vite-plus/test';
 import {
   getMarkdownPreviewContents,
   getVisibleDiffSections,
-  MAX_MARKDOWN_PREVIEW_LENGTH,
+  MAX_MARKDOWN_PREVIEW_LINE_LENGTH,
 } from '../lib/diff.ts';
 import type { ChangedFile } from '../types.ts';
 
@@ -24,11 +24,14 @@ const createUntrackedMarkdown = (contents: string) =>
     status: 'untracked',
   }) satisfies ChangedFile;
 
+const longLine = 'x'.repeat(MAX_MARKDOWN_PREVIEW_LINE_LENGTH);
+
 test.each([
-  ['at the limit', MAX_MARKDOWN_PREVIEW_LENGTH, true],
-  ['above the limit', MAX_MARKDOWN_PREVIEW_LENGTH + 1, false],
-])('Markdown %s gets a preview: %s', (_label, length, previewed) => {
-  const file = createUntrackedMarkdown('x'.repeat(length));
+  ['a line at the limit', `# Notes\n${longLine}\n`, true],
+  ['many lines that together exceed the limit', `${longLine}\n`.repeat(4), true],
+  ['a line above the limit', `# Notes\n${longLine}x\n`, false],
+])('Markdown with %s gets a preview: %s', (_label, contents, previewed) => {
+  const file = createUntrackedMarkdown(contents);
   const [{ fileDiff, section }] = getVisibleDiffSections(file, false);
 
   expect(getMarkdownPreviewContents(file, section, fileDiff) != null).toBe(previewed);

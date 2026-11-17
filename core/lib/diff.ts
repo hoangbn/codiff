@@ -227,15 +227,28 @@ export type MarkdownPreviewContents = {
   oldContents?: string;
 };
 
-// The Markdown editor never finishes rendering very large documents, so larger
-// files keep the regular diff view.
-export const MAX_MARKDOWN_PREVIEW_LENGTH = 256 * 1024;
+// The Markdown editor never finishes rendering a very long line, so documents
+// containing one keep the regular diff view.
+export const MAX_MARKDOWN_PREVIEW_LINE_LENGTH = 64 * 1024;
+
+const hasLineLongerThan = (contents: string, limit: number) => {
+  let start = 0;
+  while (start < contents.length) {
+    const newline = contents.indexOf('\n', start);
+    const end = newline === -1 ? contents.length : newline;
+    if (end - start > limit) {
+      return true;
+    }
+    start = end + 1;
+  }
+  return false;
+};
 
 const withinMarkdownPreviewLimit = (preview: MarkdownPreviewContents) =>
-  preview.contents.length <= MAX_MARKDOWN_PREVIEW_LENGTH &&
-  (preview.oldContents?.length ?? 0) <= MAX_MARKDOWN_PREVIEW_LENGTH
-    ? preview
-    : null;
+  hasLineLongerThan(preview.contents, MAX_MARKDOWN_PREVIEW_LINE_LENGTH) ||
+  hasLineLongerThan(preview.oldContents ?? '', MAX_MARKDOWN_PREVIEW_LINE_LENGTH)
+    ? null
+    : preview;
 
 export const getMarkdownPreviewContents = (
   file: ChangedFile,

@@ -39,6 +39,7 @@ export function HistorySidebar({
   onSelectSource,
   pullRequestSource,
   searchQuery,
+  showPullRequestWorkingTree = false,
   startingSelected = false,
   startingSource,
 }: {
@@ -52,6 +53,9 @@ export function HistorySidebar({
   onSelectSource: (source: ReviewSource) => void;
   pullRequestSource: PullRequestSource | null;
   searchQuery: string;
+  // Desktop review can switch a pull request to local changes; embedded
+  // provider reviews stay scoped to the pull request.
+  showPullRequestWorkingTree?: boolean;
   startingSelected?: boolean;
   startingSource?: ReviewSource;
 }) {
@@ -87,7 +91,7 @@ export function HistorySidebar({
         ? commitRows.filter((row) => row.scope === 'base').filter(matchesQuery)
         : [];
       return [
-        !normalizedQuery
+        showPullRequestWorkingTree && !normalizedQuery
           ? {
               author: null,
               committedAt: null,
@@ -210,7 +214,7 @@ export function HistorySidebar({
         : null,
       ...localRows,
     ].filter((row): row is NonNullable<typeof row> => row != null);
-  }, [branchSource, entries, normalizedQuery, pullRequestSource]);
+  }, [branchSource, entries, normalizedQuery, pullRequestSource, showPullRequestWorkingTree]);
   const maybeLoadMore = useCallback(() => {
     const element = listRef.current;
     if (!element || loading || !hasMore || normalizedQuery) {

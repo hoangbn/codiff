@@ -122,6 +122,7 @@ export function Sidebar({
           onSelectSource={onSelectSource}
           pullRequestSource={pullRequestSource}
           searchQuery={searchQuery}
+          showPullRequestWorkingTree
         />
       ) : mode === 'walkthrough' && narrativeWalkthrough ? (
         <NarrativeSidebar
