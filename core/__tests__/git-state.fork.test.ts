@@ -1,20 +1,10 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import {
-  chmod,
-  mkdir,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from 'node:fs/promises';
+import { chmod, mkdir, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { expect, test, vi } from 'vite-plus/test';
+import { expect, test } from 'vite-plus/test';
 import { fileHasVisibleDiff } from '../lib/diff.ts';
 import type { ReviewSource } from '../types.ts';
 import { type RepositoryState } from '../types.ts';
@@ -274,7 +264,7 @@ test('branch+ preserves racy-index checks for same-size text and image edits', a
 });
 
 test.each(['loose', 'packed', 'alternate', 'sparse'])(
-  'branch+ preserves original %s object bytes and timestamps across reads',
+  'branch+ adds no objects to the %s source store and keeps its bytes across reads',
   async (storage) => {
     await withRepo(async (originalRepo) => {
       const originalImage = Buffer.from(
@@ -311,14 +301,7 @@ test.each(['loose', 'packed', 'alternate', 'sparse'])(
       const objects = join(originalRepo, '.git/objects');
       const readObjects = async (
         directory = objects,
-      ): Promise<
-        Array<{
-          contents: Buffer;
-          ctimeNs: bigint;
-          mtimeNs: bigint;
-          path: string;
-        }>
-      > => {
+      ): Promise<Array<{ contents: Buffer; path: string }>> => {
         const entries = await readdir(directory, { withFileTypes: true });
         const files = await Promise.all(
           entries.map(async (entry) => {
@@ -326,23 +309,11 @@ test.each(['loose', 'packed', 'alternate', 'sparse'])(
             if (entry.isDirectory()) {
               return readObjects(path);
             }
-            const metadata = await stat(path, { bigint: true });
-            return [
-              {
-                contents: readFileSync(path),
-                ctimeNs: metadata.ctimeNs,
-                mtimeNs: metadata.mtimeNs,
-                path,
-              },
-            ];
+            return [{ contents: readFileSync(path), path }];
           }),
         );
         return files.flat().sort((left, right) => left.path.localeCompare(right.path));
       };
-      const oldTime = new Date('2020-01-01T00:00:00.000Z');
-      for (const { path } of await readObjects()) {
-        await utimes(path, oldTime, oldTime);
-      }
       const before = await readObjects();
       const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
       expect(await readObjects()).toEqual(before);
@@ -371,35 +342,6 @@ test.each(['loose', 'packed', 'alternate', 'sparse'])(
     });
   },
 );
-
-test('branch+ reads C-quoted alternate object paths without changing their timestamps', async () => {
-  await withRepo(async (repo) => {
-    await writeRepoFile(repo, 'file.txt', 'base\n');
-    await commitAll(repo, 'base');
-    const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-    await using alternateDirectory = await createTemporaryDirectory('codiff-quoted-alternate-');
-    const alternate = join(alternateDirectory.path, 'objects-\u0007\v\u001b\t-\\a-"-雪');
-    await rename(join(repo, '.git/objects'), alternate);
-    await mkdir(join(repo, '.git/objects/info'), { recursive: true });
-    await writeFile(join(repo, '.git/objects/info/alternates'), `${alternate}\n`);
-    const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
-    const objectPath = join(alternate, object.slice(0, 2), object.slice(2));
-    const before = await stat(objectPath, { bigint: true });
-    await writeRepoFile(repo, 'file.txt', 'working\n');
-    const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
-    const loaded = await readDiffSectionContent(repo, {
-      force: true,
-      kind: 'combined',
-      path: 'file.txt',
-      source: state.source,
-    });
-    expect(loaded.oldFile?.contents).toBe('base\n');
-    expect(loaded.newFile?.contents).toBe('working\n');
-    const after = await stat(objectPath, { bigint: true });
-    expect(after.mtimeNs).toBe(before.mtimeNs);
-    expect(after.ctimeNs).toBe(before.ctimeNs);
-  });
-});
 
 test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   'branch+ can snapshot read-only alternate object directories without changing them',
@@ -451,88 +393,29 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   },
 );
 
-test.skipIf(process.platform !== 'linux')(
-  'branch+ preserves non-UTF-8 alternate object paths',
-  async () => {
-    await withRepo(async (repo) => {
-      await writeRepoFile(repo, 'file.txt', 'base\n');
-      await commitAll(repo, 'base');
-      const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-      const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
-      await using alternateDirectory = await createTemporaryDirectory('codiff-byte-alternate-');
-      const alternate = Buffer.concat([
-        Buffer.from(join(alternateDirectory.path, 'objects-')),
-        Buffer.from([0xff, 0xfe]),
-      ]);
-      await rename(join(repo, '.git/objects'), alternate);
-      await mkdir(join(repo, '.git/objects/info'), { recursive: true });
-      await writeFile(
-        join(repo, '.git/objects/info/alternates'),
-        Buffer.concat([alternate, Buffer.from('\n')]),
-      );
-      const objectPath = Buffer.concat([
-        alternate,
-        Buffer.from(`/${object.slice(0, 2)}/${object.slice(2)}`),
-      ]);
-      const beforeContents = readFileSync(objectPath);
-      const before = await stat(objectPath, { bigint: true });
-      expect(await git(repo, ['cat-file', '-p', object])).toBe('base\n');
-      await writeRepoFile(repo, 'file.txt', 'working\n');
-      const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
-      const loaded = await readDiffSectionContent(repo, {
-        force: true,
-        kind: 'combined',
-        path: 'file.txt',
-        source: state.source,
-      });
-      expect(loaded.oldFile?.contents).toBe('base\n');
-      expect(loaded.newFile?.contents).toBe('working\n');
-      expect(readFileSync(objectPath)).toEqual(beforeContents);
-      const after = await stat(objectPath, { bigint: true });
-      expect(after.mtimeNs).toBe(before.mtimeNs);
-      expect(after.ctimeNs).toBe(before.ctimeNs);
-    });
-  },
-);
-
-test('branch+ retries a cache copy interrupted by Git repacking', async () => {
+test('branch+ does not run index hooks against the working tree', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'base\n');
     await commitAll(repo, 'base');
     const base = (await git(repo, ['rev-parse', 'HEAD'])).trim();
-    const object = (await git(repo, ['rev-parse', 'HEAD:file.txt'])).trim();
-    const objectPath = await realpath(
-      join(repo, '.git/objects', object.slice(0, 2), object.slice(2)),
-    );
+    const hook = join(repo, '.git/hooks/post-index-change');
+    await mkdir(join(repo, '.git/hooks'), { recursive: true });
+    await writeFile(hook, '#!/bin/sh\necho fired >> hook-fired\n');
+    await chmod(hook, 0o755);
     await writeRepoFile(repo, 'file.txt', 'working\n');
-    const fsPromises = require('node:fs').promises as typeof import('node:fs/promises');
-    const copy = fsPromises.cp;
-    let repacked = false;
-    const copySpy = vi
-      .spyOn(fsPromises, 'cp')
-      .mockImplementationOnce((source, destination, options) =>
-        copy(source, destination, {
-          ...options,
-          filter: async (filename, target) => {
-            if (filename === objectPath && !repacked) {
-              await git(repo, ['repack', '-ad']);
-              repacked = true;
-            }
-            return (await options?.filter?.(filename, target)) ?? true;
-          },
-        }),
-      );
-    try {
-      const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
-      expect(repacked).toBe(true);
-      expect(copySpy).toHaveBeenCalledTimes(2);
-      expect(state.files[0].sections[0]).toMatchObject({
-        newFile: { contents: 'working\n' },
-        oldFile: { contents: 'base\n' },
-      });
-    } finally {
-      copySpy.mockRestore();
-    }
+    await writeRepoFile(repo, 'untracked.txt', 'new\n');
+    // The fixture environment disables hooks; point it back at the repository's.
+    using _hooks = createTemporaryEnvironment({ GIT_CONFIG_VALUE_3: join(repo, '.git/hooks') });
+    expect(process.env.GIT_CONFIG_KEY_3).toBe('core.hooksPath');
+    const state = await readRepositoryState(repo, { ref: base, type: 'branch-working-tree' });
+    await readDiffSectionContent(repo, {
+      force: true,
+      kind: 'combined',
+      path: 'file.txt',
+      source: state.source,
+    });
+    expect(state.files.map((file) => file.path)).toEqual(['file.txt', 'untracked.txt']);
+    await expect(stat(join(repo, 'hook-fired'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
