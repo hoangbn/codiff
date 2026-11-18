@@ -51,7 +51,7 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsrs -p tsconfig.build.json",
     "prepack": "vp run build"
   },
   "dependencies": {
@@ -80,8 +80,9 @@
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "tsrs": "7.1.0-beta.tsrs2",
     "typescript": "^7.0.2",
-    "vite-plus": "1.6.0"
+    "vite-plus": "1.7.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",
