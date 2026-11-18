@@ -29,6 +29,7 @@ const longLine = 'x'.repeat(MAX_MARKDOWN_PREVIEW_LINE_LENGTH);
 test.each([
   ['a line at the limit', `# Notes\n${longLine}\n`, true],
   ['many lines that together exceed the limit', `${longLine}\n`.repeat(4), true],
+  ['an unterminated last line above the limit', longLine + 'x', false],
   ['a line above the limit', `# Notes\n${longLine}x\n`, false],
 ])('Markdown with %s gets a preview: %s', (_label, contents, previewed) => {
   const file = createUntrackedMarkdown(contents);
