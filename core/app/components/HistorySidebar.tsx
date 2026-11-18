@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import type { PullRequestSource } from '../../lib/app-types.ts';
 import { getShortRef, getSourceKey } from '../../lib/source.ts';
 import type { HistoryEntry, ReviewSource } from '../../types.ts';
 import { Avatar } from './Avatar.tsx';
@@ -29,32 +28,29 @@ const shortDate = (timestamp: number) => {
 };
 
 export function HistorySidebar({
-  branchSource,
   currentSource,
   entries,
   error,
   hasMore,
+  historySource,
   loading,
   onLoadMore,
   onSelectSource,
-  pullRequestSource,
   searchQuery,
-  showPullRequestWorkingTree = false,
+  showPullRequestWorkingTree = true,
   startingSelected = false,
   startingSource,
 }: {
-  branchSource: Extract<ReviewSource, { type: 'branch-diff' }> | null;
   currentSource: ReviewSource;
   entries: ReadonlyArray<HistoryEntry>;
   error?: string | null;
   hasMore: boolean;
+  historySource: ReviewSource | null;
   loading: boolean;
   onLoadMore: () => void;
   onSelectSource: (source: ReviewSource) => void;
-  pullRequestSource: PullRequestSource | null;
   searchQuery: string;
-  // Desktop review can switch a pull request to local changes; embedded
-  // provider reviews stay scoped to the pull request.
+  // Embedded hosts review a pull request without a local checkout to switch to.
   showPullRequestWorkingTree?: boolean;
   startingSelected?: boolean;
   startingSource?: ReviewSource;
@@ -65,6 +61,20 @@ export function HistorySidebar({
   const pageKey = JSON.stringify([currentSourceKey, entries.map(({ ref, scope }) => [ref, scope])]);
   const requestedPage = useRef<string | null>(null);
   const rows = useMemo(() => {
+    const pullRequestSource = historySource?.type === 'pull-request' ? historySource : null;
+    const branchSource: Extract<ReviewSource, { type: 'branch-diff' }> | null =
+      historySource?.type === 'branch-diff'
+        ? historySource
+        : historySource?.type === 'branch-working-tree' &&
+            historySource.baseRef &&
+            historySource.headRef
+          ? {
+              baseRef: historySource.baseRef,
+              headRef: historySource.headRef,
+              ref: historySource.ref,
+              type: 'branch-diff',
+            }
+          : null;
     const commitRows = entries.map((entry) => ({
       author: entry.author,
       committedAt: entry.committedAt,
@@ -214,7 +224,7 @@ export function HistorySidebar({
         : null,
       ...localRows,
     ].filter((row): row is NonNullable<typeof row> => row != null);
-  }, [branchSource, entries, normalizedQuery, pullRequestSource, showPullRequestWorkingTree]);
+  }, [entries, historySource, normalizedQuery, showPullRequestWorkingTree]);
   const maybeLoadMore = useCallback(() => {
     const element = listRef.current;
     if (!element || loading || !hasMore || normalizedQuery) {

@@ -265,7 +265,6 @@ test('expandUnchanged only expands diffs when full file contents can be loaded',
   );
   expect(codeViewMock.lastOptions?.expandUnchanged).toBe(true);
 
-  // Fork: read-only hosts may supply a content loader, so only a missing loader disables it.
-  await view.rerender(<ReviewCodeViewHarness expandUnchanged files={[file]} isReadOnly />);
+  await view.rerender(<ReviewCodeViewHarness expandUnchanged files={[file]} />);
   expect(codeViewMock.lastOptions?.expandUnchanged).toBe(false);
 });

@@ -39,9 +39,6 @@ export const shouldPreloadSectionContentsForSearch = (section: DiffSection) =>
   shouldLoadDiffSectionContents(section) ||
   (section.summary?.canLoad !== false && isPatchOnlyDiffSection(section));
 
-export const getDiffSectionLoadKey = (file: ChangedFile, section: DiffSection) =>
-  JSON.stringify([file.path, file.fingerprint, section.kind, section.id]);
-
 export const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
   isPatchOnlyDiffSection(section)
     ? {
@@ -62,30 +59,20 @@ export const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
 
 export const updateDiffSection = (
   files: ReadonlyArray<ChangedFile>,
-  targetFile: ChangedFile,
-  targetSection: DiffSection,
+  path: string,
+  sectionId: string,
   update: (section: DiffSection) => DiffSection,
-): ReadonlyArray<ChangedFile> => {
-  let didUpdate = false;
-  const nextFiles = files.map((file) => {
-    if (file.path !== targetFile.path || file.fingerprint !== targetFile.fingerprint) {
-      return file;
-    }
-
-    let didUpdateFile = false;
-    const sections = file.sections.map((section) => {
-      if (section.id !== targetSection.id || section.kind !== targetSection.kind) {
-        return section;
-      }
-      didUpdateFile = true;
-      didUpdate = true;
-      return update(section);
-    });
-    return didUpdateFile ? { ...file, sections } : file;
-  });
-
-  return didUpdate ? nextFiles : files;
-};
+): ReadonlyArray<ChangedFile> =>
+  files.map((file) =>
+    file.path === path
+      ? {
+          ...file,
+          sections: file.sections.map((section) =>
+            section.id === sectionId ? update(section) : section,
+          ),
+        }
+      : file,
+  );
 
 // Full file contents fetched lazily for patch-only sections via the CodeView
 // `loadDiffFiles` option. Kept outside React state so the library's in-place
@@ -227,28 +214,12 @@ export type MarkdownPreviewContents = {
   oldContents?: string;
 };
 
-// The Markdown editor never finishes rendering a very long line, so documents
-// containing one keep the regular diff view.
-export const MAX_MARKDOWN_PREVIEW_LINE_LENGTH = 64 * 1024;
+// Rendering a whole document blocks the renderer for seconds at this size and
+// for minutes a few times above it. Larger added files keep the text diff.
+export const MAX_MARKDOWN_DOCUMENT_PREVIEW_LENGTH = 64 * 1024;
 
-const hasLineLongerThan = (contents: string, limit: number) => {
-  let start = 0;
-  while (start < contents.length) {
-    const newline = contents.indexOf('\n', start);
-    const end = newline === -1 ? contents.length : newline;
-    if (end - start > limit) {
-      return true;
-    }
-    start = end + 1;
-  }
-  return false;
-};
-
-const withinMarkdownPreviewLimit = (preview: MarkdownPreviewContents) =>
-  hasLineLongerThan(preview.contents, MAX_MARKDOWN_PREVIEW_LINE_LENGTH) ||
-  hasLineLongerThan(preview.oldContents ?? '', MAX_MARKDOWN_PREVIEW_LINE_LENGTH)
-    ? null
-    : preview;
+const getDocumentPreview = (contents: string): MarkdownPreviewContents | null =>
+  contents.length > MAX_MARKDOWN_DOCUMENT_PREVIEW_LENGTH ? null : { contents };
 
 export const getMarkdownPreviewContents = (
   file: ChangedFile,
@@ -264,21 +235,16 @@ export const getMarkdownPreviewContents = (
   const oldFile = section.oldFile ?? loaded?.oldFile;
   const isNew = (file.status === 'added' || file.status === 'untracked') && !oldFile?.contents;
   if (newFile && (oldFile || isNew)) {
-    return withinMarkdownPreviewLimit({
-      contents: newFile.contents,
-      oldContents: isNew ? undefined : oldFile?.contents,
-    });
+    return isNew
+      ? getDocumentPreview(newFile.contents)
+      : { contents: newFile.contents, oldContents: oldFile?.contents };
   }
 
   if (file.status === 'deleted' && oldFile) {
-    return withinMarkdownPreviewLimit({ contents: '', oldContents: oldFile.contents });
+    return { contents: '', oldContents: oldFile.contents };
   }
 
-  return isNew
-    ? withinMarkdownPreviewLimit({
-        contents: joinDiffLines(fileDiff.additionLines),
-      })
-    : null;
+  return isNew ? getDocumentPreview(joinDiffLines(fileDiff.additionLines)) : null;
 };
 
 const emptyDiffLineCount: DiffLineCount = {

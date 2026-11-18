@@ -298,7 +298,7 @@ function CodeViewHeader({
     walkthroughNote,
   } = meta;
   const canOpenFile = file.status !== 'deleted';
-  const canLoadSection = Boolean(onLoadSection) && shouldLoadDiffSectionContents(section);
+  const canLoadSection = shouldLoadDiffSectionContents(section);
   const directoryEnd = file.path.lastIndexOf('/') + 1;
 
   return (
@@ -412,11 +412,11 @@ function CodeViewHeader({
           </Button>
         ) : null}
         {editActions}
-        {canLoadSection ? (
+        {canLoadSection && onLoadSection ? (
           <button
             className="codiff-load-button"
             disabled={isSectionLoading}
-            onClick={() => onLoadSection?.(file, section)}
+            onClick={() => onLoadSection(file, section)}
             title={isSectionLoading ? 'Loading file contents' : 'Load file contents'}
             type="button"
           >
@@ -2664,7 +2664,6 @@ export function ReviewCodeView({
   onUpdateSourceDescription,
   onUpdateSourceTitle,
   onUploadSourceDescriptionAsset,
-  preserveScrollOnUpdate = false,
   renderMarkdownAs = 'preview',
   reviewIdentityByPath,
   scrollTarget,
@@ -2732,7 +2731,6 @@ export function ReviewCodeView({
   onUpdateSourceDescription?: (body: string) => Promise<void> | void;
   onUpdateSourceTitle?: (title: string) => Promise<void> | void;
   onUploadSourceDescriptionAsset?: (file: File) => Promise<string> | string;
-  preserveScrollOnUpdate?: boolean;
   renderMarkdownAs?: CodiffPreferences['renderMarkdownAs'];
   reviewIdentityByPath?: ReadonlyMap<string, ReviewIdentity>;
   scrollTarget: ReviewScrollTarget | null;
@@ -2839,87 +2837,6 @@ export function ReviewCodeView({
   const definitionLookupRequestRef = useRef(0);
   const definitionModifierActiveRef = useRef(false);
   const sourceKey = getSourceKey(source);
-  const scrollContextKey =
-    source.type === 'branch-diff' || source.type === 'branch-working-tree'
-      ? `${source.type}:${source.ref}`
-      : sourceKey;
-  const preservedScroll = useRef<{
-    context: string;
-    kind: DiffSection['kind'];
-    path: string;
-    target: Extract<CodeViewScrollTarget, { type: 'item' | 'line' }>;
-  } | null>(null);
-  useLayoutEffect(() => {
-    const viewer = codeViewRef.current?.getInstance();
-    const position = preservedScroll.current;
-    let frame: number | null = null;
-    const section =
-      position &&
-      files
-        .find((file) => file.path === position.path)
-        ?.sections.find((section) => section.kind === position.kind);
-    if (preserveScrollOnUpdate && position?.context === scrollContextKey && section) {
-      // Reconcile and measure first, then restore the surviving file/line anchor.
-      frame = window.requestAnimationFrame(() => {
-        frame = window.requestAnimationFrame(() => {
-          viewer?.scrollTo({ ...position.target, id: getItemId(section) });
-        });
-      });
-    }
-    return () => {
-      if (frame !== null) {
-        window.cancelAnimationFrame(frame);
-      }
-      preservedScroll.current = null;
-      if (!preserveScrollOnUpdate || !viewer || viewer.getScrollTop() <= 0) {
-        return;
-      }
-      const top = viewer.getScrollTop();
-      let anchor: { path: string; section: DiffSection; top: number } | undefined;
-      for (const file of files) {
-        for (const section of file.sections) {
-          const itemTop = viewer.getTopForItem(getItemId(section));
-          if (
-            itemTop != null &&
-            itemTop <= top + DEFAULT_PADDING &&
-            (!anchor || itemTop > anchor.top)
-          ) {
-            anchor = { path: file.path, section, top: itemTop };
-          }
-        }
-      }
-      if (!anchor) {
-        return;
-      }
-      const rendered = viewer
-        .getRenderedItems()
-        .find((item) => item.id === getItemId(anchor.section));
-      const line = rendered?.instance.getNumericScrollAnchor(top + headerHeight - anchor.top);
-      preservedScroll.current = {
-        context: scrollContextKey,
-        kind: anchor.section.kind,
-        path: anchor.path,
-        target: line
-          ? {
-              align: 'start',
-              behavior: 'instant',
-              id: getItemId(anchor.section),
-              lineNumber: line.lineNumber,
-              side: line.side,
-              type: 'line',
-              // Line targets subtract the sticky header; item targets do not.
-              offset: anchor.top + line.top - top - headerHeight,
-            }
-          : {
-              align: 'start',
-              behavior: 'instant',
-              id: getItemId(anchor.section),
-              offset: anchor.top - top,
-              type: 'item',
-            },
-      };
-    };
-  }, [files, headerHeight, preserveScrollOnUpdate, scrollContextKey, showWhitespace]);
   const [definitionLookupSourceKey, setDefinitionLookupSourceKey] = useState(sourceKey);
   if (definitionLookupSourceKey !== sourceKey) {
     setDefinitionLookupSourceKey(sourceKey);
@@ -3334,6 +3251,80 @@ export function ReviewCodeView({
     reviewIdentityByPath,
     walkthroughNotes,
   ]);
+
+  // The viewer keeps the reading position across updates for the item ids that survive them. A
+  // comparison's section ids carry its head ref, so a refresh that picks up a commit replaces every
+  // item; find the file being read again by path and put the same line back where it was.
+  const readingContextKey =
+    source.type === 'branch-diff' || source.type === 'branch-working-tree'
+      ? `${source.type}:${source.ref}`
+      : sourceKey;
+  const readingPositionRef = useRef<{
+    contextKey: string;
+    itemKey: string;
+    target: Extract<CodeViewScrollTarget, { type: 'item' | 'line' }>;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const viewer = codeViewRef.current?.getInstance();
+    const getItemKey = (id: string) => {
+      const meta = itemMetadata.get(id);
+      return meta && `${meta.blockId}:${meta.file.path}:${meta.section.kind}`;
+    };
+    const position = readingPositionRef.current;
+    readingPositionRef.current = null;
+    if (position?.contextKey === readingContextKey) {
+      const item = items.find(({ id }) => getItemKey(id) === position.itemKey);
+      if (item && item.id !== position.target.id) {
+        codeViewRef.current?.scrollTo({ ...position.target, id: item.id });
+      }
+    }
+
+    // Cleanups run before the viewer receives the next items, so this still reads the old layout.
+    return () => {
+      const scrollTop = viewer?.getScrollTop() ?? 0;
+      if (!viewer || scrollTop <= 0) {
+        return;
+      }
+      // Anchor to the first item or line that starts below the top edge, as the viewer does.
+      for (const { id, instance } of viewer.getRenderedItems()) {
+        const itemKey = getItemKey(id);
+        const itemTop = viewer.getTopForItem(id);
+        if (!itemKey || itemTop == null) {
+          continue;
+        }
+        const line =
+          itemTop < scrollTop
+            ? instance.getNumericScrollAnchor(scrollTop + headerHeight - itemTop)
+            : undefined;
+        if (itemTop < scrollTop && !line) {
+          continue;
+        }
+        readingPositionRef.current = {
+          contextKey: readingContextKey,
+          itemKey,
+          target: line
+            ? {
+                align: 'start',
+                behavior: 'instant',
+                id,
+                lineNumber: line.lineNumber,
+                // Line targets already clear the sticky file header; item targets do not.
+                offset: itemTop + line.top - scrollTop - headerHeight,
+                side: line.side,
+                type: 'line',
+              }
+            : {
+                align: 'start',
+                behavior: 'instant',
+                id,
+                offset: itemTop - scrollTop,
+                type: 'item',
+              },
+        };
+        return;
+      }
+    };
+  }, [headerHeight, itemMetadata, items, readingContextKey]);
 
   const codeViewItems = useMemo<ReadonlyArray<CodeViewItem<ReviewAnnotationMetadata>>>(() => {
     if (items.length > 0 || !sourceDescriptionItemId) {
@@ -3851,8 +3842,12 @@ export function ReviewCodeView({
             return;
           }
 
-          if (onLoadSection && shouldLoadDiffSectionContents(meta.section)) {
-            onLoadSection(meta.file, meta.section);
+          if (shouldLoadDiffSectionContents(meta.section)) {
+            onLoadSection?.(meta.file, meta.section);
+            return;
+          }
+
+          if (isReadOnly) {
             return;
           }
 
