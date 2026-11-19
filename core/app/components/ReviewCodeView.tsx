@@ -3376,7 +3376,7 @@ export function ReviewCodeView({
         meta.section.loadState === 'ready' ||
         meta.section.loadState === 'deferred') &&
       !meta.isMarkdownPreview &&
-      meta.section.kind === 'unstaged' &&
+      (meta.section.kind === 'combined' || meta.section.kind === 'unstaged') &&
       isEditableWorkingTreeSection(source.type, meta.file, meta.section) &&
       onLoadSectionContents != null &&
       window.codiff?.getRepositoryFile != null,

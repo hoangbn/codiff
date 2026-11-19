@@ -6,12 +6,13 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
 import type { ChangedFile, ReviewSource } from '../types.ts';
+import { createChangedFile } from './helpers/fixtures.ts';
 import {
   markdownEditorMock,
   resetMarkdownEditorMock,
   createLoadedMarkdownFile,
 } from './helpers/markdown-editor.tsx';
-import { waitFor } from './helpers/react.tsx';
+import { renderReact, waitFor } from './helpers/react.tsx';
 import {
   codeViewMock,
   resetCodeViewMock,
@@ -100,6 +101,25 @@ test('combined branch Markdown edits the single combined section and refreshes a
   });
   expect(order).toEqual(['flush', 'refresh']);
   expect(JSON.stringify(codeViewMock.lastItems)).toContain('# Saved');
+});
+
+test('a combined section offers code editing', async () => {
+  vi.stubGlobal('codiff', { getRepositoryFile: vi.fn() });
+  const combinedFile = createChangedFile('combined.txt', { kind: 'combined' });
+  await using view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[combinedFile]}
+      onLoadSectionContents={async () => ({
+        newFile: { contents: 'new\n', name: combinedFile.path },
+        oldFile: { contents: 'old\n', name: combinedFile.path },
+      })}
+      source={{ baseRef: 'base', headRef: 'head', ref: 'main', type: 'branch-working-tree' }}
+    />,
+  );
+  expect(
+    view.container.querySelector(`button[aria-label="Edit ${combinedFile.path}"]`),
+  ).not.toBeNull();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
