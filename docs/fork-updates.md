@@ -19,7 +19,7 @@ real upstream ancestry and each update only resolves new conflicts. After a
 verified install it fast-forwards fork `main` to the installed source, so the
 next update starts from it. The launcher creates a fresh private workspace for
 every attempt. Codex is instructed not to touch active development checkouts,
-force-push, publish releases or change LFV dependencies. It must
+force-push, publish releases or change dependencies in Monke See. It must
 preserve fork patches and personal settings, retain a backup, stop before
 installation if checks fail, and restore the backup if installation/startup
 fails. These installation decisions belong to Codex, not a second updater
@@ -64,7 +64,7 @@ An interrupted process without a valid result is an error, not success.
   not source patches; commit those customizations to the fork first.
 - The automatic update notification setting does not hide this manual action.
   Dismiss it to hide the sidebar button; the app menu remains available.
-- LFV's embedded Codiff dependency is separate and is not updated here.
+- Monke See pins a separate Codiff revision for Repository Review.
 
 ## Verification
 
